@@ -1,6 +1,8 @@
 package app.metroclock.util
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.AudioManager
 import android.media.MediaPlayer
@@ -10,9 +12,11 @@ import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.VibrationAttributes
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import androidx.core.content.ContextCompat
 
 class SoundPlayer(private val context: Context) {
   private var currentRingtone: Ringtone? = null
@@ -110,8 +114,6 @@ class SoundPlayer(private val context: Context) {
 
       if (soundUri == null) return
 
-      // Loop the timer expiry sound continuously (like a real timer expiring)
-      // instead of playing it once like a notification ping.
       currentMediaPlayer = MediaPlayer().apply {
         setAudioAttributes(
           AudioAttributes.Builder()
@@ -130,8 +132,6 @@ class SoundPlayer(private val context: Context) {
       }
 
       if (vibrate) {
-        // Constant repeating vibration while the timer sound rings,
-        // not a single one-shot notification buzz.
         startVibration()
       }
     } catch (e: Exception) {
@@ -174,10 +174,6 @@ class SoundPlayer(private val context: Context) {
     }
   }
 
-  /**
-   * Previews an exact sound (by uri) for a limited time — used by the play button next to
-   * the sound picker in the new alarm screen and the timer settings. Stops automatically.
-   */
   fun previewSoundUri(uriString: String, durationMillis: Long = 3000L) {
     stopSound()
     try {
@@ -198,7 +194,6 @@ class SoundPlayer(private val context: Context) {
       autoSilenceRunnable = Runnable { stopSound() }
       handler.postDelayed(autoSilenceRunnable!!, durationMillis)
     } catch (e: Exception) {
-      // Fallback to Ringtone API for content uris MediaPlayer can't open directly
       try {
         currentRingtone = RingtoneManager.getRingtone(context, Uri.parse(uriString))?.apply {
           play()
@@ -234,32 +229,36 @@ class SoundPlayer(private val context: Context) {
     }
   }
 
-  private fun startVibration() {
-    try {
-      // Create a repeating vibration pattern for alarms
-      // Pattern: wait 0ms, vibrate 500ms, pause 300ms, repeat
-      val pattern = longArrayOf(0, 500, 300)
-      val amplitudes = intArrayOf(0, 255, 0)
-      
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        // Use -1 to repeat indefinitely
-        vibrator?.vibrate(VibrationEffect.createWaveform(pattern, amplitudes, -1))
-      } else {
-        @Suppress("DEPRECATION")
-        vibrator?.vibrate(pattern, 0)
-      }
-    } catch (e: Exception) {
-      e.printStackTrace()
-    }
-  }
+  // --- UPDATED VIBRATION LOGIC ---
 
-  private fun startShortVibration() {
+  private fun startVibration() {
+    // 1. Check if the device has a vibrator and if the permission is granted
+    val vib = vibrator ?: return
+    if (!vib.hasVibrator()) return
+    if (ContextCompat.checkSelfPermission(context, Manifest.permission.VIBRATE) != PackageManager.PERMISSION_GRANTED) {
+        return
+    }
+
     try {
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        vibrator?.vibrate(VibrationEffect.createOneShot(800, VibrationEffect.DEFAULT_AMPLITUDE))
+      // 2. Use a simple, reliable repeating pattern:
+      // [delay before start, vibrate duration, pause duration]
+      // The last parameter -1 means "repeat indefinitely"
+      val pattern = longArrayOf(0, 1000, 1000) // Start immediately, vibrate 1s, pause 1s
+
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        // API 31+ (Android 12+) : Use VibrationAttributes with USAGE_ALARM
+        // This ensures the vibration isn't silenced by Silent or DND mode.
+        val attributes = VibrationAttributes.Builder()
+          .setUsage(VibrationAttributes.USAGE_ALARM)
+          .build()
+        vib.vibrate(VibrationEffect.createWaveform(pattern, -1), attributes)
+      } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        // API 26-30 (Android 8-11) : Use standard VibrationEffect
+        vib.vibrate(VibrationEffect.createWaveform(pattern, -1))
       } else {
+        // API < 26 : Use deprecated method
         @Suppress("DEPRECATION")
-        vibrator?.vibrate(800)
+        vib.vibrate(pattern, 0)
       }
     } catch (e: Exception) {
       e.printStackTrace()
