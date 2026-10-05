@@ -3,7 +3,7 @@ plugins {
   // The Kotlin Android plugin was missing here; without it no Kotlin sources are compiled.
   alias(libs.plugins.kotlin.android)
   alias(libs.plugins.kotlin.compose)
-  alias(libs.plugins.google.devtools.ksp)
+  id("com.google.devtools.ksp") version "2.1.0-1.0.29"
 }
 
 android {
