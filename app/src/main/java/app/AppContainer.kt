@@ -10,6 +10,8 @@ import app.metroclock.data.SettingsDataStore
 import app.metroclock.service.TimerService
 import app.metroclock.service.TimerStateManager
 import app.metroclock.util.SoundPlayer
+import app.metroclock.util.SmartSkipManager
+import app.metroclock.util.CalendarHelper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -37,12 +39,12 @@ class AppContainer(private val context: Context) {
     SoundPlayer(context)
   }
 
-  val smartSkipManager: app.util.SmartSkipManager by lazy {
-    app.util.SmartSkipManager(context, settingsDataStore)
+  val smartSkipManager: SmartSkipManager by lazy {
+    SmartSkipManager(context, settingsDataStore)
   }
 
-  val calendarHelper: app.util.CalendarHelper by lazy {
-    app.util.CalendarHelper
+  val calendarHelper: CalendarHelper by lazy {
+    CalendarHelper
   }
 
   val timerStateManager: TimerStateManager by lazy {
