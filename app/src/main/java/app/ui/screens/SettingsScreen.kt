@@ -133,7 +133,7 @@ fun SettingsScreen(
     Column(
       modifier = Modifier
         .fillMaxSize()
-        .padding(bottom = 72.dp)
+        .padding(bottom = 90.dp)
     ) {
       // Top Category Header: "SETTINGS"
       Text(
