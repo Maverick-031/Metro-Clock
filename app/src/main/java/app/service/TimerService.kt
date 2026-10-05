@@ -31,6 +31,7 @@ class TimerService : Service() {
 
   companion object {
     const val CHANNEL_ID = "metro_timer_channel"
+    const val CHANNEL_ID_FINISHED = "metro_timer_finished_channel" // NEW HIGH PRIORITY CHANNEL
     const val NOTIFICATION_ID = 4001
     const val NOTIFICATION_ID_FINISHED = 4002
 
@@ -142,15 +143,10 @@ class TimerService : Service() {
       )
     }
 
-    // Trigger full screen notification for Time's Up
     val fullScreenIntent = Intent(this, MainActivity::class.java).apply {
       flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
       putExtra(MainActivity.EXTRA_DESTINATION, MainActivity.DEST_TIMER_FINISHED)
       putExtra(MainActivity.EXTRA_TIMER_SECONDS, stateManager.timerState.value.totalSeconds)
-      // Ensure this intent can show over lock screen
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-      }
     }
     val pendingIntent = PendingIntent.getActivity(
       this,
@@ -159,25 +155,25 @@ class TimerService : Service() {
       PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
     )
 
-    val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+    // USE THE HIGH PRIORITY CHANNEL FOR FINISHED
+    val notification = NotificationCompat.Builder(this, CHANNEL_ID_FINISHED)
       .setSmallIcon(android.R.drawable.ic_dialog_alert)
       .setContentTitle("Timer Time’s up!")
       .setContentText("Time’s up")
       .setPriority(NotificationCompat.PRIORITY_MAX)
       .setCategory(NotificationCompat.CATEGORY_ALARM)
-      .setFullScreenIntent(pendingIntent, true)
+      .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+      .setFullScreenIntent(pendingIntent, true) // THE MAGIC LINE
       .setContentIntent(pendingIntent)
-      .setAutoCancel(true)
+      .setAutoCancel(false)
+      .setOngoing(true)
       .build()
 
     val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
     nm.notify(NOTIFICATION_ID_FINISHED, notification)
 
-    try {
-      startActivity(fullScreenIntent)
-    } catch (e: Exception) {
-      e.printStackTrace()
-    }
+    // REMOVED: startActivity(fullScreenIntent) 
+    // It is blocked by Android 10+ background restrictions. The FullScreenIntent handles it.
 
     checkIfCanStopService()
   }
@@ -290,6 +286,9 @@ class TimerService : Service() {
 
   private fun createNotificationChannel() {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+      
+      // Channel 1: Ongoing Timer (Silent)
       val channel = NotificationChannel(
         CHANNEL_ID,
         "Metro Timer & Stopwatch",
@@ -297,8 +296,19 @@ class TimerService : Service() {
       ).apply {
         description = "Ongoing timer and stopwatch notifications"
       }
-      val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
       nm.createNotificationChannel(channel)
+
+      // Channel 2: Timer Finished (High Priority, Full Screen)
+      val finishedChannel = NotificationChannel(
+        CHANNEL_ID_FINISHED,
+        "Metro Timer Alerts",
+        NotificationManager.IMPORTANCE_HIGH
+      ).apply {
+        description = "Alerts when a timer finishes"
+        enableVibration(true)
+        setBypassDnd(true)
+      }
+      nm.createNotificationChannel(finishedChannel)
     }
   }
 
