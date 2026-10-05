@@ -29,11 +29,11 @@ class SmartSkipManager(
    * - Smart Skip is enabled AND
    * - Connected to a different Wi-Fi (not home) OR
    * - Outside home GPS geofence
-      */
+   */
   suspend fun shouldSkipAlarmDueToLocation(): Boolean {
     val enabled = settingsDataStore.smartSkipEnabled.first()
     if (!enabled) return false
-​
+
     val mode = settingsDataStore.smartSkipMode.first()
     return when (mode) {
       "wifi" -> isAwayFromHomeWifi()
@@ -41,11 +41,11 @@ class SmartSkipManager(
       else -> isAwayFromHomeWifi() || isAwayFromHomeGeofence()
     }
   }
-​
+
   private suspend fun isAwayFromHomeWifi(): Boolean {
     val homeWifiSsid = settingsDataStore.smartSkipHomeWifi.first()
     if (homeWifiSsid.isBlank()) return false
-​
+
     return try {
       val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
       val currentSsid = wifiManager?.connectionInfo?.ssid?.replace("\"", "") ?: ""
@@ -68,20 +68,20 @@ class SmartSkipManager(
 
     // If home is not set (0,0), do not skip - alarm should ring
     if (homeLat == 0.0 && homeLng == 0.0) return false
-​
+
     val hasFine = ContextCompat.checkSelfPermission(
       context,
       android.Manifest.permission.ACCESS_FINE_LOCATION
     ) == PackageManager.PERMISSION_GRANTED
-​
+
     val hasCoarse = ContextCompat.checkSelfPermission(
       context,
       android.Manifest.permission.ACCESS_COARSE_LOCATION
     ) == PackageManager.PERMISSION_GRANTED
-​
+
     // Use approximate location if fine is not available
     if (!hasFine && !hasCoarse) return false
-​
+
     return try {
       val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
       
@@ -93,7 +93,7 @@ class SmartSkipManager(
       }
       providers.add(LocationManager.NETWORK_PROVIDER)
       providers.add(LocationManager.PASSIVE_PROVIDER)
-​
+
       var lastKnown: Location? = null
       for (provider in providers) {
         val loc = locationManager?.getLastKnownLocation(provider)
@@ -101,7 +101,7 @@ class SmartSkipManager(
           lastKnown = loc
         }
       }
-​
+
       if (lastKnown != null) {
         val results = FloatArray(1)
         Location.distanceBetween(
