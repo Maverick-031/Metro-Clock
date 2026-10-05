@@ -75,7 +75,7 @@ class MainActivity : ComponentActivity() {
         WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
       )
     }
-​
+
     // Ensure window stays on for alarm/timer screens
     window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     handleIncomingIntent(intent)
