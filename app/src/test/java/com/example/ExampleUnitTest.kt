@@ -1,4 +1,4 @@
-package com.example
+package app.metroclock
 
 import com.example.alarm.AlarmScheduler
 import com.example.data.AlarmEntity

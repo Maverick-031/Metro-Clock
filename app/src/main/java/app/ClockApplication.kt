@@ -1,0 +1,13 @@
+package app.metroclock
+
+import android.app.Application
+
+class ClockApplication : Application() {
+  lateinit var container: AppContainer
+    private set
+
+  override fun onCreate() {
+    super.onCreate()
+    container = AppContainer(this)
+  }
+}

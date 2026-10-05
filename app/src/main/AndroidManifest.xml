@@ -18,7 +18,8 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
-        android:name=".ClockApplication"
+        package="app.metroclock"
+    android:name=".ClockApplication"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
@@ -46,9 +47,9 @@
             android:name=".receiver.AlarmReceiver"
             android:exported="true">
             <intent-filter>
-                <action android:name="com.example.ALARM_TRIGGER" />
-                <action android:name="com.example.ALARM_SNOOZE" />
-                <action android:name="com.example.ALARM_DISMISS" />
+                <action android:name="app.metroclock.ALARM_TRIGGER" />
+                <action android:name="app.metroclock.ALARM_SNOOZE" />
+                <action android:name="app.metroclock.ALARM_DISMISS" />
             </intent-filter>
         </receiver>
 
