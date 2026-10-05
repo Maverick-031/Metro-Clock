@@ -178,7 +178,7 @@ fun MetroSoundPickerDialog(
 /**
  * Builds the list of sounds shown in [MetroSoundPickerDialog]:
  * "Default alarm sound", every alarm/ringtone/notification tone installed on the device,
- * and "Silent". Titles are read via RingtoneManager (no intents involved).
+ * "Add new" for custom sounds, and "Silent". Titles are read via RingtoneManager (no intents involved).
  */
 fun buildMetroSoundOptions(context: Context): List<SoundOption> {
   val options = mutableListOf(
@@ -195,7 +195,7 @@ fun buildMetroSoundOptions(context: Context): List<SoundOption> {
       "(is_ringtone=1 OR is_alarm=1 OR is_notification=1)",
       null,
       "${MediaStore.Audio.Media._ID} ASC"
-    ) ?: return options + SoundOption(id = "", title = "Silent", uri = null)
+    ) ?: return options + SoundOption(id = "add_new", title = "Add new", uri = null) + SoundOption(id = "", title = "Silent", uri = null)
 
     val idCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
     val titleCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
@@ -214,6 +214,6 @@ fun buildMetroSoundOptions(context: Context): List<SoundOption> {
     cursor?.close()
   }
 
-  options.add(SoundOption(id = "", title = "Silent", uri = null))
+  options.add(SoundOption(id = "add_new", title = "Add new", uri = null))
   return options
 }
