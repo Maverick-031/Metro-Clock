@@ -1,10 +1,14 @@
 package app.metroclock
 
 import android.Manifest
+import android.app.NotificationManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.view.KeyEvent
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -16,7 +20,6 @@ import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
-import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
@@ -103,29 +106,14 @@ class MainActivity : ComponentActivity() {
       val smartSkipMode by viewModel.smartSkipMode.collectAsStateWithLifecycle()
       val smartSkipHomeWifi by viewModel.smartSkipHomeWifi.collectAsStateWithLifecycle()
 
-      // --- FIX: Trigger Sound/Vibration immediately when screen changes ---
+      // --- FIX: Sound handling. AlarmReceiver and TimerService already play the sound.
+      // We only need to stop the sound when the user leaves the screen.
       LaunchedEffect(currentScreen) {
         val appContext = application as ClockApplication
-        when (currentScreen) {
-          is Screen.AlarmTriggered -> {
-            appContext.container.soundPlayer.playAlarmSound(
-              vibrate = alarmVibrate,
-              silenceAfterMinutes = alarmSilenceAfter,
-              gradualVolumeSeconds = alarmGradualVolume
-            )
-          }
-          is Screen.TimerFinished -> {
-            appContext.container.soundPlayer.playTimerFinishedSound(
-              vibrate = timerVibrate,
-              gradualVolume = timerGradualVolume
-            )
-          }
-          else -> {
-            appContext.container.soundPlayer.stopSound()
-          }
+        if (currentScreen !is Screen.AlarmTriggered && currentScreen !is Screen.TimerFinished) {
+          appContext.container.soundPlayer.stopSound()
         }
       }
-      // -------------------------------------------------------------------
 
       // Runtime permission for notifications on Android 13+
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -143,6 +131,25 @@ class MainActivity : ComponentActivity() {
           }
         }
       }
+
+      // --- FIX: Android 14+ Full Screen Intent Permission ---
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+        LaunchedEffect(Unit) {
+          val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+          if (!notificationManager.canUseFullScreenIntent()) {
+            // Redirect user to the settings page to grant full-screen intent permission
+            try {
+              val intent = Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT).apply {
+                data = Uri.parse("package:$packageName")
+              }
+              startActivity(intent)
+            } catch (e: Exception) {
+              e.printStackTrace()
+            }
+          }
+        }
+      }
+      // ----------------------------------------------------
 
       MetroClockTheme(
         accentColor = selectedAccent.color,
