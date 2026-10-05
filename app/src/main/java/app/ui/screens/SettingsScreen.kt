@@ -582,7 +582,7 @@ fun AlarmSettingsTab(
               color = textColor
             )
             Text(
-              text = "Automatically pause alarms when off-site or away",
+              text = "Alarm only rings when connected to home Wi-Fi or within home GPS location",
               fontSize = 13.sp,
               fontWeight = FontWeight.Light,
               color = subtextColor
