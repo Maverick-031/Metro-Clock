@@ -376,6 +376,11 @@ class ClockViewModel(
     soundPlayer.previewSound(soundName)
   }
 
+  /** Plays the exact selected sound (alarm or timer) briefly — used by the play button. */
+  fun previewSoundUri(uriString: String) {
+    soundPlayer.previewSoundUri(uriString)
+  }
+
   fun stopSound() {
     soundPlayer.stopSound()
   }

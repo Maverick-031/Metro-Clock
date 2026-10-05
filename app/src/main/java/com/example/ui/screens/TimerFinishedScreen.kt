@@ -116,14 +116,14 @@ fun TimerFinishedScreen(
 
       Spacer(modifier = Modifier.weight(1f))
 
-      // Center: large clean clock icon in white circle
+      // Center: large ringing alarm clock — same icon and animation as when an alarm rings
       Box(
         modifier = Modifier
           .fillMaxWidth()
           .weight(2f),
         contentAlignment = Alignment.Center
       ) {
-        TimerClockGraphic(modifier = Modifier.size(130.dp))
+        RingingAlarmClockGraphic(modifier = Modifier.size(140.dp))
       }
 
       Spacer(modifier = Modifier.weight(1f))

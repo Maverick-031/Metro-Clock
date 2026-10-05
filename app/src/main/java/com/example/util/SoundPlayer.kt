@@ -110,32 +110,29 @@ class SoundPlayer(private val context: Context) {
 
       if (soundUri == null) return
 
-      if (gradualVolume) {
-        currentMediaPlayer = MediaPlayer().apply {
-          setAudioAttributes(
-            AudioAttributes.Builder()
-              .setUsage(AudioAttributes.USAGE_NOTIFICATION)
-              .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-              .build()
-          )
-          setDataSource(context, soundUri)
-          setVolume(0.1f, 0.1f)
-          prepare()
-          start()
-        }
-        startVolumeFade(5)
-      } else {
-        currentRingtone = RingtoneManager.getRingtone(context, soundUri)?.apply {
-          audioAttributes = AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+      // Loop the timer expiry sound continuously (like a real timer expiring)
+      // instead of playing it once like a notification ping.
+      currentMediaPlayer = MediaPlayer().apply {
+        setAudioAttributes(
+          AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_ALARM)
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
             .build()
-          play()
-        }
+        )
+        setDataSource(context, soundUri)
+        isLooping = true
+        if (gradualVolume) setVolume(0.1f, 0.1f)
+        prepare()
+        start()
+      }
+      if (gradualVolume) {
+        startVolumeFade(5)
       }
 
       if (vibrate) {
-        startShortVibration()
+        // Constant repeating vibration while the timer sound rings,
+        // not a single one-shot notification buzz.
+        startVibration()
       }
     } catch (e: Exception) {
       e.printStackTrace()
@@ -174,6 +171,43 @@ class SoundPlayer(private val context: Context) {
       }
     } catch (e: Exception) {
       e.printStackTrace()
+    }
+  }
+
+  /**
+   * Previews an exact sound (by uri) for a limited time — used by the play button next to
+   * the sound picker in the new alarm screen and the timer settings. Stops automatically.
+   */
+  fun previewSoundUri(uriString: String, durationMillis: Long = 3000L) {
+    stopSound()
+    try {
+      if (uriString.isBlank()) return
+      val parsedUri = Uri.parse(uriString)
+      currentMediaPlayer = MediaPlayer().apply {
+        setAudioAttributes(
+          AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_ALARM)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build()
+        )
+        setDataSource(context, parsedUri)
+        prepare()
+        setOnCompletionListener { stopSound() }
+        start()
+      }
+      autoSilenceRunnable = Runnable { stopSound() }
+      handler.postDelayed(autoSilenceRunnable!!, durationMillis)
+    } catch (e: Exception) {
+      // Fallback to Ringtone API for content uris MediaPlayer can't open directly
+      try {
+        currentRingtone = RingtoneManager.getRingtone(context, Uri.parse(uriString))?.apply {
+          play()
+        }
+        autoSilenceRunnable = Runnable { stopSound() }
+        handler.postDelayed(autoSilenceRunnable!!, durationMillis)
+      } catch (e2: Exception) {
+        e2.printStackTrace()
+      }
     }
   }
 

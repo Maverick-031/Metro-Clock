@@ -52,6 +52,13 @@ class MainActivity : ComponentActivity() {
     super.onCreate(savedInstanceState)
     enableEdgeToEdge()
 
+    // Safety net: if the app process is recreated while no alarm/timer screen is shown,
+    // make sure nothing keeps ringing or vibrating in the background.
+    val app = application as ClockApplication
+    if (intent?.getStringExtra(EXTRA_DESTINATION) == null) {
+      app.container.soundPlayer.stopSound()
+    }
+
     // Keep screen on and show over lock screen if triggered
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
       setShowWhenLocked(true)

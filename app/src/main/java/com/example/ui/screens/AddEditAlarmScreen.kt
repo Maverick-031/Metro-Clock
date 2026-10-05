@@ -1,12 +1,9 @@
 package com.example.ui.screens
 
 import android.Manifest
-import android.app.Activity
-import android.content.Intent
+import android.content.Context
 import android.content.pm.PackageManager
 import android.media.RingtoneManager
-import android.net.Uri
-import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -21,6 +18,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -58,16 +56,17 @@ import com.example.data.AlarmEntity
 import com.example.ui.animation.MetroTurnstileEntrance
 import com.example.ui.components.MetroAppBar
 import com.example.ui.components.MetroAppBarAction
+import com.example.ui.components.MetroSoundPickerDialog
 import com.example.ui.components.MetroTimePicker
 import com.example.ui.components.MetroToggle
+import com.example.ui.components.SoundOption
+import com.example.ui.components.buildMetroSoundOptions
 import com.example.ui.theme.LocalAccentColor
 import com.example.ui.theme.LocalMetroBackground
 import com.example.ui.theme.LocalMetroDivider
 import com.example.ui.theme.LocalMetroSubtextColor
 import com.example.ui.theme.LocalMetroTextColor
 import com.example.ui.theme.LocalMetroTileBg
-import com.example.ui.theme.MetroBlack
-import com.example.ui.theme.MetroLightGray
 import com.example.util.rememberMetroHaptic
 import java.util.Calendar
 
@@ -111,6 +110,8 @@ fun AddEditAlarmScreen(
   var showTimePicker by remember { mutableStateOf(false) }
   var showRepeatsScreen by remember { mutableStateOf(false) }
   var showSnoozeMenu by remember { mutableStateOf(false) }
+  // In-app Metro sound picker (replaces the crashing system ringtone picker)
+  var showSoundPicker by remember { mutableStateOf(false) }
 
   val accentColor = LocalAccentColor.current
   val textColor = LocalMetroTextColor.current
@@ -126,28 +127,9 @@ fun AddEditAlarmScreen(
     skipIfCalendarEvent = isGranted
   }
 
-  // System sound picker launcher for alarm sounds
-  val soundPickerLauncher = rememberLauncherForActivityResult(
-    ActivityResultContracts.StartActivityForResult()
-  ) { result ->
-    if (result.resultCode == Activity.RESULT_OK) {
-      val uri: Uri? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        result.data?.getParcelableExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI, Uri::class.java)
-      } else {
-        @Suppress("DEPRECATION")
-        result.data?.getParcelableExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
-      }
-      if (uri != null) {
-        val ringtone = RingtoneManager.getRingtone(context, uri)
-        val title = ringtone?.getTitle(context) ?: "System Alarm"
-        soundUri = uri.toString()
-        soundName = title
-      } else {
-        soundUri = ""
-        soundName = "Silent"
-      }
-    }
-  }
+  // Sound options for the in-app picker: Default, every alarm/ringtone/notification
+  // tone installed on the device, and Silent.
+  val soundOptions = remember(context) { buildMetroSoundOptions(context) }
 
   // Formatted time string
   val formatted12Hour = if (hour == 0) 12 else if (hour > 12) hour - 12 else hour
@@ -215,6 +197,40 @@ fun AddEditAlarmScreen(
     return
   }
 
+  // In-app Metro Sound Picker (no system intent — avoids the post-selection crash)
+  if (showSoundPicker) {
+    val currentSelectedId = when {
+      soundUri.isNotBlank() -> soundUri
+      soundName == "Silent" -> ""
+      else -> "default"
+    }
+    MetroSoundPickerDialog(
+      title = "alarm sound",
+      options = soundOptions,
+      selectedId = currentSelectedId,
+      onSelect = { option ->
+        haptic()
+        when {
+          option.id.isEmpty() -> {
+            soundUri = ""
+            soundName = "Silent"
+          }
+          option.id == "default" -> {
+            soundUri = ""
+            soundName = "Default Alarm"
+          }
+          else -> {
+            soundUri = option.uri ?: ""
+            soundName = option.title
+          }
+        }
+        showSoundPicker = false
+      },
+      onDismiss = { showSoundPicker = false }
+    )
+    return
+  }
+
   Box(
     modifier = Modifier
       .fillMaxSize()
@@ -228,22 +244,18 @@ fun AddEditAlarmScreen(
         .verticalScroll(rememberScrollState())
         .padding(bottom = 80.dp)
     ) {
-      // Top Category Header: "Metro Clock" (as requested by user)
+      // Top Category Header: "METRO CLOCK" (all caps, matching the app's category style)
       Text(
-        text = "Metro Clock",
-        fontSize = 12.sp,
-        fontWeight = FontWeight.Bold,
-        letterSpacing = 1.5.sp,
+        text = "METRO CLOCK",
+        style = com.example.ui.theme.MetroTextStyle.Category,
         color = textColor,
         modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 4.dp)
       )
 
       Text(
         text = if (existingAlarm == null) "new alarm" else "edit alarm",
-        fontSize = 44.sp,
-        fontWeight = FontWeight.Light,
+        style = com.example.ui.theme.MetroTextStyle.PageTitle,
         color = textColor,
-        letterSpacing = (-0.5).sp,
         modifier = Modifier.padding(start = 24.dp, bottom = 24.dp)
       )
 
@@ -359,7 +371,7 @@ fun AddEditAlarmScreen(
           }
         }
 
-        // 4. Sound field with System Sound Picker
+        // 4. Sound field with In-App Metro Sound Picker
         MetroTurnstileEntrance(delayMillis = 90) {
           Column {
             Text(
@@ -380,16 +392,7 @@ fun AddEditAlarmScreen(
                   .border(1.dp, subtextColor.copy(alpha = 0.5f))
                   .clickable {
                     haptic()
-                    val intent = Intent(RingtoneManager.ACTION_RINGTONE_PICKER).apply {
-                      putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_ALARM or RingtoneManager.TYPE_RINGTONE)
-                      putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "Select Alarm Sound")
-                      putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
-                      putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, true)
-                      if (soundUri.isNotEmpty()) {
-                        putExtra(RingtoneManager.EXTRA_RINGTONE_EXISTING_URI, Uri.parse(soundUri))
-                      }
-                    }
-                    soundPickerLauncher.launch(intent)
+                    showSoundPicker = true
                   }
                   .padding(horizontal = 12.dp)
                   .testTag("btn_select_alarm_sound"),
@@ -415,14 +418,19 @@ fun AddEditAlarmScreen(
                 }
               }
 
-              // Preview sound square button
+              // Preview sound square button — plays the currently selected sound
               Box(
                 modifier = Modifier
                   .size(48.dp)
                   .border(1.dp, subtextColor.copy(alpha = 0.5f))
                   .clickable {
                     haptic()
-                    onPreviewSound(soundName)
+                    val playableUri = when {
+                      soundUri.isNotBlank() -> soundUri
+                      soundName == "Silent" -> ""
+                      else -> RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)?.toString() ?: ""
+                    }
+                    onPreviewSound(playableUri)
                   }
                   .testTag("btn_preview_alarm_sound"),
                 contentAlignment = Alignment.Center
