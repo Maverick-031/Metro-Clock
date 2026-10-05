@@ -1,7 +1,1 @@
-# Kotlin/Gradle build artifacts
-.kotlin/
-build/
-.gradle/
-
-# Logs and crash reports
-*.log
+(empty)
