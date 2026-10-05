@@ -63,7 +63,6 @@ class MainActivity : ComponentActivity() {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
       setShowWhenLocked(true)
       setTurnScreenOn(true)
-      // Allow the app to draw over other apps (for full screen alarm/timer)
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
         window.setDecorFitsSystemWindows(false)
       }
@@ -104,7 +103,31 @@ class MainActivity : ComponentActivity() {
       val smartSkipMode by viewModel.smartSkipMode.collectAsStateWithLifecycle()
       val smartSkipHomeWifi by viewModel.smartSkipHomeWifi.collectAsStateWithLifecycle()
 
-      // Runtime permission for notifications on Android 13+ (TIRAMISU)
+      // --- FIX: Trigger Sound/Vibration immediately when screen changes ---
+      LaunchedEffect(currentScreen) {
+        val appContext = application as ClockApplication
+        when (currentScreen) {
+          is Screen.AlarmTriggered -> {
+            appContext.container.soundPlayer.playAlarmSound(
+              vibrate = alarmVibrate,
+              silenceAfterMinutes = alarmSilenceAfter,
+              gradualVolumeSeconds = alarmGradualVolume
+            )
+          }
+          is Screen.TimerFinished -> {
+            appContext.container.soundPlayer.playTimerFinishedSound(
+              vibrate = timerVibrate,
+              gradualVolume = timerGradualVolume
+            )
+          }
+          else -> {
+            appContext.container.soundPlayer.stopSound()
+          }
+        }
+      }
+      // -------------------------------------------------------------------
+
+      // Runtime permission for notifications on Android 13+
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         val permissionLauncher = rememberLauncherForActivityResult(
           ActivityResultContracts.RequestPermission()
@@ -130,7 +153,6 @@ class MainActivity : ComponentActivity() {
           modifier = Modifier.fillMaxSize(),
           color = if (isLightTheme) androidx.compose.ui.graphics.Color.White else MetroBlack
         ) {
-          // Classic Windows Phone Turnstile Animated Transitions
           AnimatedContent(
             targetState = currentScreen,
             transitionSpec = metroTurnstileTransition(),
@@ -254,7 +276,6 @@ class MainActivity : ComponentActivity() {
             return true
           }
           else -> {
-            // "control volume"
             return super.onKeyDown(keyCode, event)
           }
         }
