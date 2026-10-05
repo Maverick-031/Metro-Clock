@@ -1,10 +1,15 @@
 package app.metroclock.ui.components
 
 import android.content.Context
+import android.content.Intent
 import android.database.Cursor
 import android.media.RingtoneManager
+import android.net.Uri
 import android.provider.MediaStore
+import android.provider.OpenableColumns
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -32,6 +37,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -72,11 +78,31 @@ fun MetroSoundPickerDialog(
 ) {
   BackHandler { onDismiss() }
 
+  val context = LocalContext.current
   val bgColor = LocalMetroBackground.current
   val textColor = LocalMetroTextColor.current
   val subtextColor = LocalMetroSubtextColor.current
   val dividerColor = LocalMetroDivider.current
   val accentColor = LocalAccentColor.current
+
+  // Launcher for picking a custom audio file from the system file explorer
+  val filePickerLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.GetContent()
+  ) { uri: Uri? ->
+    uri?.let {
+      // Try to persist the permission so the alarm can access the file later
+      try {
+        context.contentResolver.takePersistableUriPermission(
+          it,
+          Intent.FLAG_GRANT_READ_URI_PERMISSION
+        )
+      } catch (e: SecurityException) {
+        // Some providers don't support persistable permissions, ignore.
+      }
+      val displayName = getFileNameFromUri(context, it) ?: "Custom Sound"
+      onSelect(SoundOption(id = it.toString(), title = displayName, uri = it.toString()))
+    }
+  }
 
   Box(
     modifier = Modifier
@@ -125,7 +151,12 @@ fun MetroSoundPickerDialog(
               .background(if (isSelected) accentColor else Color.Transparent)
               .border(1.dp, if (isSelected) accentColor else dividerColor)
               .clickable {
-                onSelect(option)
+                if (option.id == "add_new") {
+                  // Launch the system file explorer for audio files
+                  filePickerLauncher.launch("audio/*")
+                } else {
+                  onSelect(option)
+                }
               }
               .padding(horizontal = 14.dp)
               .testTag("sound_option_${option.id}"),
@@ -218,5 +249,23 @@ fun buildMetroSoundOptions(context: Context): List<SoundOption> {
   }
 
   options.add(SoundOption(id = "add_new", title = "Add new", uri = null))
+  options.add(SoundOption(id = "", title = "Silent", uri = null))
   return options
+}
+
+/**
+ * Helper function to extract the display name from a content URI returned by the file picker.
+ */
+private fun getFileNameFromUri(context: Context, uri: Uri): String? {
+  var name: String? = null
+  val cursor = context.contentResolver.query(uri, null, null, null, null)
+  cursor?.use {
+    if (it.moveToFirst()) {
+      val nameIndex = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+      if (nameIndex != -1) {
+        name = it.getString(nameIndex)
+      }
+    }
+  }
+  return name
 }
