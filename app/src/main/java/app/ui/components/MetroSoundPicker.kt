@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material3.Icon
@@ -123,23 +124,29 @@ fun MetroSoundPickerDialog(
               .height(52.dp)
               .background(if (isSelected) accentColor else Color.Transparent)
               .border(1.dp, if (isSelected) accentColor else dividerColor)
-              .clickable { onSelect(option) }
-              .padding(horizontal = 14.dp)
-              .testTag("sound_option_${option.id}"),
+
+              .clickable {
+                if (option.id == "add_new") {
+                  onSelect(option)
+                } else {
+                  onSelect(option)
+                }
+                .padding(horizontal = 14.dp)
+                .testTag("sound_option_${option.id}"),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
           ) {
             Icon(
-              imageVector = if (isSelected) Icons.Default.Check else Icons.Default.MusicNote,
+              imageVector = if (isSelected) Icons.Default.Check else if (option.id == "add_new") Icons.Default.Add else Icons.Default.MusicNote,
               contentDescription = null,
-              tint = if (isSelected) Color.Black else subtextColor,
+              tint = if (isSelected) Color.Black else if (option.id == "add_new") accentColor else subtextColor,
               modifier = Modifier.size(20.dp)
             )
             Text(
               text = option.title,
               fontSize = 17.sp,
               fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-              color = if (isSelected) Color.Black else textColor,
+              color = if (isSelected) Color.Black else if (option.id == "add_new") accentColor else textColor,                
               modifier = Modifier.weight(1f)
             )
           }
