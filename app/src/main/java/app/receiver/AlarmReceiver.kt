@@ -48,7 +48,6 @@ class AlarmReceiver : BroadcastReceiver() {
         val smartSkip = intent.getBooleanExtra(EXTRA_SMART_SKIP, false)
         val soundUri = intent.getStringExtra(EXTRA_SOUND_URI) ?: ""
 
-        // Check if all alarms are currently turned off in Settings/3-dot menu
         var allAlarmsDisabled = false
         var vibrate = true
         var silenceAfter = "10"
@@ -63,26 +62,20 @@ class AlarmReceiver : BroadcastReceiver() {
           }
         }
 
-        if (allAlarmsDisabled) {
-          return // Do not ring or show notification if all alarms disabled
-        }
+        if (allAlarmsDisabled) return
 
-        // Feature: Skip Holidays / Calendar Events
         if (skipCalendar && app?.container?.calendarHelper?.hasAllDayEvent(context, System.currentTimeMillis()) == true) {
           return
         }
 
-        // Feature: Location Aware / Smart Skip
         if (smartSkip) {
           val skipDueToLocation = runBlocking {
             app?.container?.smartSkipManager?.shouldSkipAlarmDueToLocation() ?: false
           }
-          if (skipDueToLocation) {
-            return
-          }
+          if (skipDueToLocation) return
         }
 
-        // Notify sound player with user preferences
+        // Play sound and vibration immediately
         soundPlayer?.playAlarmSound(
           customUri = soundUri,
           vibrate = vibrate,
@@ -90,10 +83,8 @@ class AlarmReceiver : BroadcastReceiver() {
           gradualVolumeSeconds = gradualVolume
         )
 
-        // Create notification channel
         createNotificationChannel(context)
 
-        // Intent to open MainActivity directly on the Alarm Triggered full-screen
         val fullScreenIntent = Intent(context, MainActivity::class.java).apply {
           flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
           putExtra(MainActivity.EXTRA_DESTINATION, MainActivity.DEST_ALARM_TRIGGERED)
@@ -102,10 +93,6 @@ class AlarmReceiver : BroadcastReceiver() {
           putExtra(EXTRA_ALARM_HOUR, hour)
           putExtra(EXTRA_ALARM_MINUTE, minute)
           putExtra(EXTRA_SNOOZE_MINUTES, snoozeMinutes)
-          // Ensure this intent can show over lock screen
-          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-          }
         }
         val fullScreenPendingIntent = PendingIntent.getActivity(
           context,
@@ -114,7 +101,6 @@ class AlarmReceiver : BroadcastReceiver() {
           PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        // Snooze intent
         val snoozeIntent = Intent(context, AlarmReceiver::class.java).apply {
           action = ACTION_ALARM_SNOOZE
           putExtra(EXTRA_ALARM_ID, alarmId)
@@ -122,21 +108,16 @@ class AlarmReceiver : BroadcastReceiver() {
           putExtra(EXTRA_SNOOZE_MINUTES, snoozeMinutes)
         }
         val snoozePendingIntent = PendingIntent.getBroadcast(
-          context,
-          (alarmId + 100).toInt(),
-          snoozeIntent,
+          context, (alarmId + 100).toInt(), snoozeIntent,
           PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        // Dismiss intent
         val dismissIntent = Intent(context, AlarmReceiver::class.java).apply {
           action = ACTION_ALARM_DISMISS
           putExtra(EXTRA_ALARM_ID, alarmId)
         }
         val dismissPendingIntent = PendingIntent.getBroadcast(
-          context,
-          (alarmId + 200).toInt(),
-          dismissIntent,
+          context, (alarmId + 200).toInt(), dismissIntent,
           PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
@@ -147,9 +128,9 @@ class AlarmReceiver : BroadcastReceiver() {
           .setPriority(NotificationCompat.PRIORITY_MAX)
           .setCategory(NotificationCompat.CATEGORY_ALARM)
           .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-          .setFullScreenIntent(fullScreenPendingIntent, true)
+          .setFullScreenIntent(fullScreenPendingIntent, true) // THE MAGIC LINE
           .setContentIntent(fullScreenPendingIntent)
-          .setAutoCancel(true)
+          .setAutoCancel(false) // Don't auto-cancel so the user has to dismiss it
           .setOngoing(true)
           .addAction(android.R.drawable.ic_popup_reminder, "Snooze", snoozePendingIntent)
           .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Dismiss", dismissPendingIntent)
@@ -158,12 +139,8 @@ class AlarmReceiver : BroadcastReceiver() {
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.notify((NOTIFICATION_ID_BASE + alarmId).toInt(), notification)
 
-        // Start activity if allowed
-        try {
-          context.startActivity(fullScreenIntent)
-        } catch (e: Exception) {
-          e.printStackTrace()
-        }
+        // REMOVED: context.startActivity(fullScreenIntent) 
+        // It is blocked by Android 10+ background restrictions. The FullScreenIntent handles it.
       }
 
       ACTION_ALARM_SNOOZE -> {
@@ -174,7 +151,6 @@ class AlarmReceiver : BroadcastReceiver() {
         soundPlayer?.stopSound()
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.cancel((NOTIFICATION_ID_BASE + alarmId).toInt())
-
         app?.container?.alarmScheduler?.snooze(alarmId, alarmName, snoozeMinutes)
       }
 
