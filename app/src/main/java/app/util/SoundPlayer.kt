@@ -236,9 +236,14 @@ class SoundPlayer(private val context: Context) {
 
   private fun startVibration() {
     try {
-      val pattern = longArrayOf(0, 500, 300, 500, 300, 1000)
+      // Create a repeating vibration pattern for alarms
+      // Pattern: wait 0ms, vibrate 500ms, pause 300ms, repeat
+      val pattern = longArrayOf(0, 500, 300)
+      val amplitudes = intArrayOf(0, 255, 0)
+      
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        vibrator?.vibrate(VibrationEffect.createWaveform(pattern, 0))
+        // Use -1 to repeat indefinitely
+        vibrator?.vibrate(VibrationEffect.createWaveform(pattern, amplitudes, -1))
       } else {
         @Suppress("DEPRECATION")
         vibrator?.vibrate(pattern, 0)
