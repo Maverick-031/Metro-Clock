@@ -144,9 +144,13 @@ class TimerService : Service() {
 
     // Trigger full screen notification for Time's Up
     val fullScreenIntent = Intent(this, MainActivity::class.java).apply {
-      flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+      flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
       putExtra(MainActivity.EXTRA_DESTINATION, MainActivity.DEST_TIMER_FINISHED)
       putExtra(MainActivity.EXTRA_TIMER_SECONDS, stateManager.timerState.value.totalSeconds)
+      // Ensure this intent can show over lock screen
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      }
     }
     val pendingIntent = PendingIntent.getActivity(
       this,
