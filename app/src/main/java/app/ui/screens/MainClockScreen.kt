@@ -48,6 +48,8 @@ import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.metroclock.ui.ClockViewModel
 import app.metroclock.ui.components.MetroAppBar
+import app.metroclock.ui.theme.LocalMetroTextColor
+import app.metroclock.ui.theme.MetroTextStyle
 import app.metroclock.ui.components.MetroAppBarAction
 import app.metroclock.ui.components.MetroMenuItem
 import app.metroclock.ui.components.TimerLengthDialog
@@ -139,10 +141,8 @@ fun MainClockScreen(
       ) {
         Text(
           text = "METRO CLOCK",
-          fontSize = 12.sp,
-          fontWeight = FontWeight.Bold,
-          letterSpacing = 1.5.sp,
-          color = textColor
+          style = MetroTextStyle.Category,
+          color = LocalMetroTextColor.current
         )
       }
 

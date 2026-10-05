@@ -3,7 +3,6 @@ package app.metroclock.ui.screens
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
-import android.media.RingtoneManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -428,7 +427,7 @@ fun AddEditAlarmScreen(
                     val playableUri = when {
                       soundUri.isNotBlank() -> soundUri
                       soundName == "Silent" -> ""
-                      else -> RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)?.toString() ?: ""
+                      else -> ""
                     }
                     onPreviewSound(playableUri)
                   }

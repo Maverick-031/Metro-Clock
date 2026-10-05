@@ -37,8 +37,12 @@ class AppContainer(private val context: Context) {
     SoundPlayer(context)
   }
 
-  val smartSkipManager: app.metroclock.util.SmartSkipManager by lazy {
-    app.metroclock.util.SmartSkipManager(context, settingsDataStore)
+  val smartSkipManager: app.util.SmartSkipManager by lazy {
+    app.util.SmartSkipManager(context, settingsDataStore)
+  }
+
+  val calendarHelper: app.util.CalendarHelper by lazy {
+    app.util.CalendarHelper
   }
 
   val timerStateManager: TimerStateManager by lazy {

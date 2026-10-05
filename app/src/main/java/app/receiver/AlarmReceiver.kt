@@ -68,7 +68,7 @@ class AlarmReceiver : BroadcastReceiver() {
         }
 
         // Feature: Skip Holidays / Calendar Events
-        if (skipCalendar && app.metroclock.util.CalendarHelper.hasAllDayEvent(context, System.currentTimeMillis())) {
+        if (skipCalendar && app?.container?.calendarHelper?.hasAllDayEvent(context, System.currentTimeMillis()) == true) {
           return
         }
 
