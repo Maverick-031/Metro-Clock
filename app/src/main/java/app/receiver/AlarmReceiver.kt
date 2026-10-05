@@ -95,13 +95,17 @@ class AlarmReceiver : BroadcastReceiver() {
 
         // Intent to open MainActivity directly on the Alarm Triggered full-screen
         val fullScreenIntent = Intent(context, MainActivity::class.java).apply {
-          flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+          flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
           putExtra(MainActivity.EXTRA_DESTINATION, MainActivity.DEST_ALARM_TRIGGERED)
           putExtra(EXTRA_ALARM_ID, alarmId)
           putExtra(EXTRA_ALARM_NAME, alarmName)
           putExtra(EXTRA_ALARM_HOUR, hour)
           putExtra(EXTRA_ALARM_MINUTE, minute)
           putExtra(EXTRA_SNOOZE_MINUTES, snoozeMinutes)
+          // Ensure this intent can show over lock screen
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+          }
         }
         val fullScreenPendingIntent = PendingIntent.getActivity(
           context,
