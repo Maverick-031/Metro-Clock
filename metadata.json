@@ -1,0 +1,6 @@
+{
+  "name": "Metro Clock",
+  "description": "Windows Phone Metro UI Clock app featuring alarms, timer, stopwatch, world clock, and customizable live tile accent colors.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

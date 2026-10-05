@@ -1,0 +1,30 @@
+<resources>
+    <string name="app_name">Metro Clock</string>
+    <string name="header_alarms">ALARMS</string>
+    <string name="header_settings">SETTINGS</string>
+    <string name="tab_alarms">alarms</string>
+    <string name="tab_timer">timer</string>
+    <string name="tab_stopwatch">stopwatch</string>
+    <string name="tab_world_clock">world clock</string>
+    <string name="settings_tab_alarm">alarm</string>
+    <string name="settings_tab_timer">timer</string>
+    <string name="settings_tab_colors">colors</string>
+    <string name="title_accents">accents</string>
+    <string name="title_new_alarm">new alarm</string>
+    <string name="title_edit_alarm">edit alarm</string>
+    <string name="title_choose_time">CHOOSE TIME</string>
+    <string name="title_repeats_on">REPEATS ON</string>
+    <string name="title_times_up">time’s up</string>
+    <string name="quick_set">quick set</string>
+    <string name="timer_length">timer length</string>
+    <string name="done">done</string>
+    <string name="cancel">cancel</string>
+    <string name="save">save</string>
+    <string name="snooze">snooze</string>
+    <string name="dismiss">dismiss</string>
+    <string name="restart">restart</string>
+    <string name="play">play</string>
+    <string name="pause">pause</string>
+    <string name="reset">reset</string>
+    <string name="lap">lap</string>
+</resources>
