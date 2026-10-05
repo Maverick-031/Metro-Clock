@@ -118,23 +118,16 @@ fun MetroSoundPickerDialog(
       ) {
         items(options, key = { it.id }) { option ->
           val isSelected = option.id == selectedId
-          Row(
-            modifier = Modifier
-              .fillMaxWidth()
-              .height(52.dp)
-              .background(if (isSelected) accentColor else Color.Transparent)
-              .border(1.dp, if (isSelected) accentColor else dividerColor)
-
-              .clickable {
-                if (option.id == "add_new") {
-                  onSelect(option)
-                } else {
-                  onSelect(option)
-                }
-                .padding(horizontal = 14.dp)
-                .testTag("sound_option_${option.id}"),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+             modifier = Modifier
+               .fillMaxWidth()
+               .height(52.dp)
+               .background(if (isSelected) accentColor else Color.Transparent)
+               .border(1.dp, if (isSelected) accentColor else dividerColor)
+               .clickable {
+                 onSelect(option)
+               }
+               .padding(horizontal = 14.dp)
+               .testTag("sound_option_${option.id}"),
           ) {
             Icon(
               imageVector = if (isSelected) Icons.Default.Check else if (option.id == "add_new") Icons.Default.Add else Icons.Default.MusicNote,
