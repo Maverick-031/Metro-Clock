@@ -63,6 +63,10 @@ class MainActivity : ComponentActivity() {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
       setShowWhenLocked(true)
       setTurnScreenOn(true)
+      // Allow the app to draw over other apps (for full screen alarm/timer)
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        window.setDecorFitsSystemWindows(false)
+      }
     } else {
       @Suppress("DEPRECATION")
       window.addFlags(
@@ -71,7 +75,9 @@ class MainActivity : ComponentActivity() {
         WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
       )
     }
-
+​
+    // Ensure window stays on for alarm/timer screens
+    window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     handleIncomingIntent(intent)
 
     setContent {
