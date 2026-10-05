@@ -23,7 +23,7 @@ jobs:
         distribution: 'temurin'
 
     - name: Build APK
-      run: ./gradlew assembleRelease
+      run: ./gradlew assembleRelease --info
 
     - name: Rename APK
       run: |
