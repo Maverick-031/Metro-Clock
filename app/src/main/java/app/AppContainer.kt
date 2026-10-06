@@ -228,7 +228,10 @@ class AppContainer(context: Context) {
         TimerService.ACTION_START_STOPWATCH,
         TimerService.ACTION_PAUSE_STOPWATCH,
         TimerService.ACTION_RESET_STOPWATCH,
-        TimerService.ACTION_LAP_STOPWATCH
+        TimerService.ACTION_LAP_STOPWATCH,
+        TimerService.ACTION_DISMISS_TIMER_FINISHED,
+        TimerService.ACTION_RESTART_TIMER,
+        TimerService.ACTION_STOP_SERVICE
       )
   }
 }
