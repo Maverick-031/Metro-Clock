@@ -23,10 +23,10 @@ class SoundPlayer(context: Context) {
      * Waveform format:
      * [initial delay, vibrate ON, pause OFF, vibrate ON, ...]
      */
-    private val ALARM_VIBR*TION_PATTERN =
-      longArrayOf(0*, 1000L, 1000L)
+    private val ALARM_VIBRATION_PATTERN =
+      longArrayOf(0L, 1000L, 1000L)
 
-    private val T*MER_VIBRATION_PATTERN =
+    private val TIMER_VIBRATION_PATTERN =
       longArrayOf(0L, 400L, 200L, 400L, 2000L)
 
     private const val PREVIEW_DURATION_MS = 5000L
