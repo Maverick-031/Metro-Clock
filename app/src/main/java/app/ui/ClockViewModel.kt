@@ -85,9 +85,9 @@ class ClockViewModel(
 
   val selectedAccent: StateFlow<AccentColor> =
     settingsDataStore.selectedAccentId
-      .map { id ->
+      .map { accentId ->
         MetroAccentsList.find { accent ->
-          accent.id == id
+          accent.id == accentId
         } ?: DefaultAccent
       }
       .stateIn(
@@ -121,7 +121,7 @@ class ClockViewModel(
     _worldCities.asStateFlow()
 
   // ---------------------------------------------------------------------------
-  // Global alarm preference
+  // Global alarm settings
   // ---------------------------------------------------------------------------
 
   val allAlarmsDisabled: StateFlow<Boolean> =
@@ -182,71 +182,74 @@ class ClockViewModel(
     )
 
   /**
-   * Stored URI of the selected timer sound.
+   * URI of the selected timer sound.
    *
-   * An empty value means that the system default timer sound should be used.
+   * An empty string means that the system default sound should be used.
    */
-  val timerSoundUri: S*ateFlow<String> =
-    settingsData*tore.timerSoundUri.stateIn(
-      *cope = viewModelScope,
-      start*d = SharingStarted.WhileSubscribed*5000),
+  val timerSoundUri: StateFlow<String> =
+    settingsDataStore.timerSoundUri.stateIn(
+      scope = viewModelScope,
+      started = SharingStarted.WhileSubscribed(5000),
       initialValue = ""
-   *)
-
-  val timerGradualVolume: State*low<Boolean> =
-    settingsDataSto*e.timerGradualVolume.stateIn(
-    * scope = viewModelScope,
-      sta*ted = SharingStarted.WhileSubscrib*d(5000),
-      initialValue = fals*
     )
 
-  val timerVibrate: StateF*ow<Boolean> =
-    settingsDataStor*.timerVibrate.stateIn(
-      scope*= viewModelScope,
-      started = *haringStarted.WhileSubscribed(5000*,
+  val timerGradualVolume: StateFlow<Boolean> =
+    settingsDataStore.timerGradualVolume.stateIn(
+      scope = viewModelScope,
+      started = SharingStarted.WhileSubscribed(5000),
+      initialValue = false
+    )
+
+  val timerVibrate: StateFlow<Boolean> =
+    settingsDataStore.timerVibrate.stateIn(
+      scope = viewModelScope,
+      started = SharingStarted.WhileSubscribed(5000),
       initialValue = true
     )
-*  // -----------------------------*----------------------------------*----------
-  // Smart Skip setting*
-  // ----------------------------*----------------------------------*-----------
 
-  val smartSkipEnable*: StateFlow<Boolean> =
-    setting*DataStore.smartSkipEnabled.stateIn*
+  // ---------------------------------------------------------------------------
+  // Smart Skip settings
+  // ---------------------------------------------------------------------------
+
+  val smartSkipEnabled: StateFlow<Boolean> =
+    settingsDataStore.smartSkipEnabled.stateIn(
       scope = viewModelScope,
-   *  started = SharingStarted.WhileSu*scribed(5000),
-      initialValue * false
+      started = SharingStarted.WhileSubscribed(5000),
+      initialValue = false
     )
 
-  val smartSkipMode:*StateFlow<String> =
-    settingsDa*aStore.smartSkipMode.stateIn(
-    * scope = viewModelScope,
-      sta*ted = SharingStarted.WhileSubscrib*d(5000),
-      initialValue = "wif*"
+  val smartSkipMode: StateFlow<String> =
+    settingsDataStore.smartSkipMode.stateIn(
+      scope = viewModelScope,
+      started = SharingStarted.WhileSubscribed(5000),
+      initialValue = "wifi"
     )
 
-  val smartSkipHomeWifi: *tateFlow<String> =
-    settingsDat*Store.smartSkipHomeWifi.stateIn(
- *    scope = viewModelScope,
-      *tarted = SharingStarted.WhileSubsc*ibed(5000),
-      initialValue = "*
+  val smartSkipHomeWifi: StateFlow<String> =
+    settingsDataStore.smartSkipHomeWifi.stateIn(
+      scope = viewModelScope,
+      started = SharingStarted.WhileSubscribed(5000),
+      initialValue = ""
     )
 
-  // ---------------------*----------------------------------*------------------
-  // Navigation*  // -----------------------------*----------------------------------*----------
+  // ---------------------------------------------------------------------------
+  // Navigation
+  // ---------------------------------------------------------------------------
 
-  private val _current*creen =
-    MutableStateFlow<Scree*>(Screen.Main)
+  private val _currentScreen =
+    MutableStateFlow<Screen>(Screen.Main)
 
-  val currentScree*: StateFlow<Screen> =
-    _current*creen.asStateFlow()
+  val currentScreen: StateFlow<Screen> =
+    _currentScreen.asStateFlow()
 
-  // Main piv*t tab: 0 = alarms, 1 = timer, 2 = *topwatch.
-  private val _selectedT*b = MutableStateFlow(0)
+  // Main pivot tab: 0 = alarms, 1 = timer, 2 = stopwatch.
+  private val _selectedTab =
+    MutableStateFlow(0)
 
-  val sel*ctedTab: StateFlow<Int> =
-    _sel*ctedTab.asStateFlow()
+  val selectedTab: StateFlow<Int> =
+    _selectedTab.asStateFlow()
 
-  // ------*--------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
   // Dialog state
   // ---------------------------------------------------------------------------
 
@@ -261,8 +264,8 @@ class ClockViewModel(
   // ---------------------------------------------------------------------------
 
   /*
-   * These jobs prevent an unfinished Room or DataStore lookup from starting
-   * sound after the user has already dismissed or left the triggered screen.
+   * These jobs allow pending Room/DataStore reads to be cancelled when the
+   * user dismisses, snoozes, restarts, or leaves a triggered screen.
    */
   private var alarmReplayJob: Job? = null
   private var timerReplayJob: Job? = null
@@ -272,52 +275,58 @@ class ClockViewModel(
   // ---------------------------------------------------------------------------
 
   fun navigateTo(screen: Screen) {
-    /*
-     * Cancel a pending replay when navigating away from its related screen.
-     */
     when (screen) {
-      is Scr*en.AlarmTriggered -> {
-        tim*rReplayJob?.cancel()
-        timer*eplayJob = null
+      is Screen.AlarmTriggered -> {
+        /*
+         * Entering an alarm screen invalidates a pending timer replay.
+         */
+        timerReplayJob?.cancel()
+        timerReplayJob = null
       }
 
-      is *creen.TimerFinished -> {
-        a*armReplayJob?.cancel()
-        ala*mReplayJob = null
+      is Screen.TimerFinished -> {
+        /*
+         * Entering a timer-finished screen invalidates a pending alarm replay.
+         */
+        alarmReplayJob?.cancel()
+        alarmReplayJob = null
       }
 
-      e*se -> {
-        cancelSoundReplayJ*bs()
+      else -> {
+        cancelSoundReplayJobs()
       }
     }
 
-    _currentSc*een.value = screen
+    _currentScreen.value = screen
   }
 
-  fun navi*ateBack() {
-    cancelSoundReplayJ*bs()
+  fun navigateBack() {
+    cancelSoundReplayJobs()
     soundPlayer.stopSound()
- *  _currentScreen.value = Screen.Ma*n
+    _currentScreen.value = Screen.Main
   }
 
-  fun setSelectedTab(tab: I*t) {
-    _selectedTab.value = tab.*oerceIn(0, 2)
+  fun setSelectedTab(tab: Int) {
+    _selectedTab.value = tab.coerceIn(0, 2)
   }
 
-  // ----------*----------------------------------*-----------------------------
-  //*Alarm management
-  // ------------*----------------------------------*---------------------------
+  // ---------------------------------------------------------------------------
+  // Alarm management
+  // ---------------------------------------------------------------------------
 
-  fun*toggleAllAlarmsDisabled() {
-    vi*wModelScope.launch {
-      val cur*entlyDisabled =
-        settingsDa*aStore.allAlarmsDisabled.first()
+  fun toggleAllAlarmsDisabled() {
+    viewModelScope.launch {
+      val currentlyDisabled =
+        settingsDataStore.allAlarmsDisabled.first()
 
-*     val newDisabled = !currentlyD*sabled
+      val newDisabled = !currentlyDisabled
 
-      settingsDataStore.se*AllAlarmsDisabled(newDisabled)
+      settingsDataStore.setAllAlarmsDisabled(
+        newDisabled
+      )
 
-  *   val enabledAlarms = repository.*etEnabledAlarms()
+      val enabledAlarms =
+        repository.getEnabledAlarms()
 
       if (newDisabled) {
         enabledAlarms.forEach { alarm ->
@@ -335,58 +344,56 @@ class ClockViewModel(
     alarm: AlarmEntity,
     enabled: Boolean
   ) {
-    val updatedAlarm = alarm.copy(
-      isEnabled = enabled
-    )
-
     viewModelScope.launch {
       var globallyDisabled =
         settingsDataStore.allAlarmsDisabled.first()
 
       /*
-       * Enabling an individual alarm also restores the global alarm switch.
+       * Enabling one alarm also re-enables alarms globally.
        */
-      if (globallyDisabled && en*bled) {
-        settingsDataStore.*etAllAlarmsDisabled(false)
-       *globallyDisabled = false
+      if (enabled && globallyDisabled) {
+        settingsDataStore.setAllAlarmsDisabled(false)
+        globallyDisabled = false
       }
 
-*     repository.updateAlarm(update*Alarm)
+      val updatedAlarm =
+        alarm.copy(isEnabled = enabled)
 
-      if (enabled && !glob*llyDisabled) {
-        scheduler.s*hedule(updatedAlarm)
-      } else *
-        scheduler.cancel(updatedA*arm)
+      repository.updateAlarm(updatedAlarm)
+
+      if (enabled && !globallyDisabled) {
+        scheduler.schedule(updatedAlarm)
+      } else {
+        scheduler.cancel(updatedAlarm)
       }
     }
   }
 
-  fun save*larm(
+  fun saveAlarm(
     id: Long?,
-    hour: Int*
+    hour: Int,
     minute: Int,
-    name: String*
+    name: String,
     repeatDays: Int,
-    soundNam*: String,
-    soundUri: String = "*,
+    soundName: String,
+    soundUri: String = "",
     snoozeMinutes: Int = 10,
-   *skipIfCalendarEvent: Boolean = fal*e,
-    smartSkipLocation: Boolean * false
+    skipIfCalendarEvent: Boolean = false,
+    smartSkipLocation: Boolean = false
   ) {
-    viewModelScope.la*nch {
-      val safeHour = hour.co*rceIn(0, 23)
-      val safeMinute * minute.coerceIn(0, 59)
-      val *afeSnoozeMinutes = snoozeMinutes.c*erceAtLeast(1)
+    viewModelScope.launch {
+      val normalizedId = id ?: 0L
 
-      val alarm = *larmEntity(
-        id = id ?: 0L,*        hour = safeHour,
-        m*nute = safeMinute,
-        name = *ame.ifBlank { "Alarm" },
-        i*Enabled = true,
-        repeatDays*= repeatDays,
-        soundName = *oundName,
-        soundUri = soundUri,
-        snoozeMinutes = safeSnoozeMinutes,
+      val alarm = AlarmEntity(
+        id = normalizedId,
+        hour = hour.coerceIn(0, 23),
+        minute = minute.coerceIn(0, 59),
+        name = name.trim().ifBlank { "Alarm" },
+        isEnabled = true,
+        repeatDays = repeatDays,
+        soundName = soundName.trim(),
+        soundUri = soundUri.trim(),
+        snoozeMinutes = snoozeMinutes.coerceAtLeast(1),
         skipIfCalendarEvent = skipIfCalendarEvent,
         smartSkipLocation = smartSkipLocation
       )
@@ -394,346 +401,416 @@ class ClockViewModel(
       val globallyDisabled =
         settingsDataStore.allAlarmsDisabled.first()
 
-      if (id == null || id == 0L) {
-        val newId = repository.insertAlarm(alarm)
-        val insertedAlarm = alarm.copy(id = newId)
+      if (normalizedId == 0L) {
+        val newAlarmId =
+          repository.insertAlarm(alarm)
+
+        val insertedAlarm =
+          alarm.copy(id = newAlarmId)
 
         if (!globallyDisabled) {
           scheduler.schedule(insertedAlarm)
         }
       } else {
         /*
-         * Cancel the old schedule before replacing it. This is especially
-         * important when the alarm time or repeat days were changed.
+         * Cancel the previous PendingIntent before updating. This prevents an
+         * old time or repeat schedule from remaining active.
          */
-        val existingAla*m = repository.allAlarms
-         *.first()
-          .firstOrNull { *xisting ->
-            existing.id*== id
-          }
+        val previousAlarm =
+          repository.allAlarms
+            .first()
+            .firstOrNull { existingAlarm ->
+              existingAlarm.id == normalizedId
+            }
 
-        if (exi*tingAlarm != null) {
-          sch*duler.cancel(existingAlarm)
-      * }
+        if (previousAlarm != null) {
+          scheduler.cancel(previousAlarm)
+        }
 
-        repository.updateAlarm*alarm)
+        repository.updateAlarm(alarm)
 
-        if (!globallyDisab*ed) {
-          scheduler.schedule*alarm)
+        if (!globallyDisabled) {
+          scheduler.schedule(alarm)
         }
       }
 
-      _c*rrentScreen.value = Screen.Main
-  * }
-  }
-
-  fun deleteAlarm(alarm: A*armEntity) {
-    viewModelScope.la*nch {
-      scheduler.cancel(alarm*
-      repository.deleteAlarm(alar*)
-      _currentScreen.value = Scr*en.Main
+      _currentScreen.value = Screen.Main
     }
   }
 
-  fun snoozeAla*m(
+  fun deleteAlarm(alarm: AlarmEntity) {
+    viewModelScope.launch {
+      scheduler.cancel(alarm)
+      repository.deleteAlarm(alarm)
+      _currentScreen.value = Screen.Main
+    }
+  }
+
+  fun snoozeAlarm(
     alarmId: Long,
-    name: St*ing,
+    name: String,
     minutes: Int = 10
   ) {
- *  alarmReplayJob?.cancel()
-    ala*mReplayJob = null
+    alarmReplayJob?.cancel()
+    alarmReplayJob = null
 
-    soundPlayer*stopSound()
+    soundPlayer.stopSound()
 
-    scheduler.snooze(*      alarmId = alarmId,
-      nam* = name,
-      minutes = minutes.c*erceAtLeast(1)
+    /*
+     * Positional arguments avoid depending on AlarmScheduler parameter names.
+     */
+    scheduler.snooze(
+      alarmId,
+      name.ifBlank { "Alarm" },
+      minutes.coerceAtLeast(1)
     )
 
-    _current*creen.value = Screen.Main
-* }
+    _currentScreen.value = Screen.Main
+  }
 
   fun dismissAlarm() {
-    ala*mReplayJob?.cancel()
-   *alarmReplayJob = null
+    alarmReplayJob?.cancel()
+    alarmReplayJob = null
 
-   *sound*layer.stopSound()
-   *_currentScreen.value = Screen.Main*  }
+    soundPlayer.stopSound()
+    _currentScreen.value = Screen.Main
+  }
 
- *// -------------------------------*----------------------------------*--------
+  // ---------------------------------------------------------------------------
   // Timer operations
- *// -------------------------------*----------------------------------*--------
+  // ---------------------------------------------------------------------------
 
-  fun setTimerDuration(s*conds: Int) {
-   *container.timerStateManager.setTim*rDuration(
-      seconds.coerceAtL*ast(0)
+  fun setTimerDuration(seconds: Int) {
+    /*
+     * Changing timer duration also invalidates any previous finished alert.
+     */
+    timerReplayJob?.cancel()
+    timerReplayJob = null
+
+    soundPlayer.stopSound()
+
+    container.timerStateManager.setTimerDuration(
+      seconds.coerceAtLeast(0)
     )
- *}
-
-* fun startTimer() {
-*   container.startTimer()
-* }
-
-* fun pauseTimer() {
-*   container.pauseTimer()
-**}
-
-* fun resetTimer() {
-   *timerReplayJob?.cancel()
-*   timerReplayJob = null
-
-   *soundPlayer.stopSound()
-*  *container.resetTimer()
- *}
-
- *fun showTimerLength(show: Boolean)*{
-    _showTimerLengthDialog.value*= show
   }
 
-**fun dismissTimerFinished() {
-   *timerReplayJob?.cancel()
-   *timer*eplayJob = null
+  fun startTimer() {
+    timerReplayJob?.cancel()
+    timerReplayJob = null
 
-   *soundPlayer.stopSound()
-    contai*er.timerStateManager.dismissTimerF*nished()
-    _currentScreen.value * Screen.Main
+    soundPlayer.stopSound()
+    container.startTimer()
   }
 
-**fun restartTimer() {
-*   timerReplayJob?.cancel()
-*   timerReplayJob = null
+  fun pauseTimer() {
+    container.pauseTimer()
+  }
 
-*  *soundPlayer.stopSound()
-*  *container.timerStateManager.dismis*TimerFinished()
-    container.star*Timer()
-   *_*urrentScreen.value = Screen.Main
- *}
+  fun resetTimer() {
+    timerReplayJob?.cancel()
+    timerReplayJob = null
 
-**// -------------------------------*----------------------------------*--------
-  // Stopwatch operations* *// -------------------------------*----------------------------------*--------
+    /*
+     * AppContainer stops sound immediately and asks TimerService to clear the
+     * timer state and finished notification.
+     */
+    container.resetTimer()
 
-  fun startStopwatch() {*   *container*startStopwatch()
-**}
+    _currentScreen.value = Screen.Main
+  }
 
-**fun*pauseStopwatch() {
-*  *container.pauseStopwatch()
-**}
+  fun showTimerLength(show: Boolean) {
+    _showTimerLengthDialog.value = show
+  }
 
-**fun*resetStopwatch() {
-*  *container*resetStopwatch()
-**}
+  fun dismissTimerFinished() {
+    timerReplayJob?.cancel()
+    timerReplayJob = null
 
-**fun*recordStopwatchLap() {
-*  *container*recordStopwatchLap()
-**}
+    /*
+     * Update in-process UI state immediately. TimerService performs the same
+     * operation safely and removes its finished notification.
+     */
+    soundPlayer.stopSound()
+    container.timerStateManager.dismissTimerFinished()
+    container.dismissTimerFinished()
 
-**//*----------------------------------*----------------------------------*-----
-**//*Appearance settings operations
-**// -------------------------------*----------------------------------*--------
+    _currentScreen.value = Screen.Main
+  }
 
-**fun selectAccentColor(accentId: St*ing) {
-*  *view*odelScope.launch {
-     *settings*ataStore.setAccentColor(accentId)
-*  *}
-**}
+  fun restartTimer() {
+    timerReplayJob?.cancel()
+    timerReplayJob = null
 
-**fun*setUseDynamicColor(useDynamic: Boo*ean) {
-   *view*odelScope.launch {
-*    *settings*ataStore.setUseDynamicColor(useDyn*mic)
-*  *}
-**}
+    /*
+     * TimerService owns restart cleanup, notification removal, and countdown
+     * startup. Do not independently call startTimer() here.
+     */
+    soundPlayer.stopSound()
+    container.restartFinishedTimer()
 
-**fun setLightTheme(enabled: Boolean* {
-   *viewModelScope.launch {
-*    *settingsDataStore.setLightTheme(en*bled)
-   *}
-**}
+    _currentScreen.value = Screen.Main
+  }
 
-**//*----------------------------------*----------------------------------*-----
-  // World clock operations
-* // ------------------------------*----------------------------------*---------
+  // ---------------------------------------------------------------------------
+  // Stopwatch operations
+  // ---------------------------------------------------------------------------
 
-  fun addWorldCity(city* WorldClockCity) {
-*   if (_worldCities.value.none { e*istingCity ->
-        existingCity*id == city.id
-     *}
-*   ) {
-*    *_worldCities.value = _worldCities.*alue + city
-   *}
-**}
+  fun startStopwatch() {
+    container.startStopwatch()
+  }
 
-**fun removeWorldCity(city: WorldClo*kCity) {
-   *_worldCities.value = _worldCities.*alue.filter { existingCity ->
-    * existingCity.id != city.id
-   *}
-**}
+  fun pauseStopwatch() {
+    container.pauseStopwatch()
+  }
 
- *// -------------------------------*----------------------------------*--------
-  // Alarm settings opera*ions
-  // ------------------------*----------------------------------*---------------
+  fun resetStopwatch() {
+    container.resetStopwatch()
+  }
 
-  fun setAlarmVib*ate(enabled: Boolean) {
-    viewMo*elScope.launch {
-     *settingsDataStore.setAlarmVibrate(*nabled)
-   *}
-**}
+  fun recordStopwatchLap() {
+    container.recordStopwatchLap()
+  }
 
-**fun setAlarmSilenceAfter(silenceAf*er: String) {
-    viewModelScope.l*unch {
-     *settingsDataStore.setAlarmSilenceA*ter(silenceAfter)
-   *}
-* }
+  // ---------------------------------------------------------------------------
+  // Appearance settings operations
+  // ---------------------------------------------------------------------------
 
-**fun setAlarmSnoozeLength(minutes: *nt) {
-   *viewModelScope.launch {
-     *settingsDataStore.setAlarmSnoozeLe*gth(
-        minutes.coerceAtLeast*1)
-     *)
-*  *}
- *}
-
-* fun*setAlarmGradualVolume(seconds: Str*ng) {
+  fun selectAccentColor(accentId: String) {
     viewModelScope.launch {
-*    *settings*ataStore.setAlarmGradualVolume(sec*nds)
-    }
-**}
-
-**fun setAlarmVolumeButtons(action: *tring) {
-    viewModelScope.launch*{
-     *settingsDataStore.setAlarmVolumeBu*tons(action)
-    }
-**}
-
-* // ------------------------------*----------------------------------*---------
-  // Timer settings oper*tions
-  // -----------------------*----------------------------------*----------------
-
-  fun setTimerSo*nd(
-    uri: String,
-   *title: String
- *) {
-*   viewModelScope.launch {
-*     settingsDataStore.setTimerSou*d(
-        uri*= uri,
-       *title = title
-*    *)
-   *}
- *}
-
- *fun setTimerGradualVolume(enabled:*Boolean) {
-    viewModelScope.laun*h {
-      settingsDataStore.setTim*rGradualVolume(enabled)
-   *}
- *}
-
-* fun setTimerVibrate(enabled: Bool*an) {
-*   viewModelScope.launch {
-*     settingsDataStore.setTimerVib*ate(enabled)
-    }
-* }
-
-* // ------------------------------*----------------------------------*---------
-  // Smart Skip operatio*s
-  // ---------------------------*----------------------------------*------------
-
-  fun setSmartSkipEn*bled(enabled: Boolean) {
-    viewM*delScope.launch {
-      settingsDa*aStore.setSmartSkipEnabled(enabled*
+      settingsDataStore.setAccentColor(accentId)
     }
   }
 
-  fun setSmartSkipMode*mode: String) {
-    viewModelScope*launch {
-      settingsDataStore.s*tSmartSkipMode(mode)
-    }
-* }
-
-**fun setSmartSkipHomeWifi(ssid: Str*ng) {
+  fun setUseDynamicColor(useDynamic: Boolean) {
     viewModelScope.launch {
-*     settingsDataStore.setSmartSki*HomeWifi(ssid)
-    }
- *}
-
-  fun setSmartSkipHomeLocation*
-    lat: Double,
-   *lng: Double,
-   *radius: Int = 1000
-  ) {
-*   viewModelScope.launch {
-*     settingsDataStore.setSmartSki*HomeLocation(
-        lat = lat,
- *      lng = lng,
-        radius = *adius.coerceAtLeast(1)
+      settingsDataStore.setUseDynamicColor(
+        useDynamic
       )
-   *}
+    }
   }
 
-* // ------------------------------*----------------------------------*---------
+  fun setLightTheme(enabled: Boolean) {
+    viewModelScope.launch {
+      settingsDataStore.setLightTheme(enabled)
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // World clock operations
+  // ---------------------------------------------------------------------------
+
+  fun addWorldCity(city: WorldClockCity) {
+    val alreadyAdded =
+      _worldCities.value.any { existingCity ->
+        existingCity.id == city.id
+      }
+
+    if (!alreadyAdded) {
+      _worldCities.value =
+        _worldCities.value + city
+    }
+  }
+
+  fun removeWorldCity(city: WorldClockCity) {
+    _worldCities.value =
+      _worldCities.value.filter { existingCity ->
+        existingCity.id != city.id
+      }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Alarm settings operations
+  // ---------------------------------------------------------------------------
+
+  fun setAlarmVibrate(enabled: Boolean) {
+    viewModelScope.launch {
+      settingsDataStore.setAlarmVibrate(enabled)
+    }
+  }
+
+  fun setAlarmSilenceAfter(
+    silenceAfter: String
+  ) {
+    viewModelScope.launch {
+      settingsDataStore.setAlarmSilenceAfter(
+        silenceAfter
+      )
+    }
+  }
+
+  fun setAlarmSnoozeLength(minutes: Int) {
+    viewModelScope.launch {
+      settingsDataStore.setAlarmSnoozeLength(
+        minutes.coerceAtLeast(1)
+      )
+    }
+  }
+
+  fun setAlarmGradualVolume(seconds: String) {
+    viewModelScope.launch {
+      settingsDataStore.setAlarmGradualVolume(
+        seconds
+      )
+    }
+  }
+
+  fun setAlarmVolumeButtons(action: String) {
+    viewModelScope.launch {
+      settingsDataStore.setAlarmVolumeButtons(
+        action
+      )
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Timer settings operations
+  // ---------------------------------------------------------------------------
+
+  fun setTimerSound(
+    uri: String,
+    title: String
+  ) {
+    viewModelScope.launch {
+      /*
+       * Positional arguments avoid relying on the parameter names declared by
+       * SettingsDataStore.setTimerSound().
+       */
+      settingsDataStore.setTimerSound(
+        uri.trim(),
+        title.trim().ifBlank { "Default Sound" }
+      )
+    }
+  }
+
+  fun setTimerGradualVolume(enabled: Boolean) {
+    viewModelScope.launch {
+      settingsDataStore.setTimerGradualVolume(
+        enabled
+      )
+    }
+  }
+
+  fun setTimerVibrate(enabled: Boolean) {
+    viewModelScope.launch {
+      settingsDataStore.setTimerVibrate(enabled)
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Smart Skip operations
+  // ---------------------------------------------------------------------------
+
+  fun setSmartSkipEnabled(enabled: Boolean) {
+    viewModelScope.launch {
+      settingsDataStore.setSmartSkipEnabled(
+        enabled
+      )
+    }
+  }
+
+  fun setSmartSkipMode(mode: String) {
+    viewModelScope.launch {
+      settingsDataStore.setSmartSkipMode(mode)
+    }
+  }
+
+  fun setSmartSkipHomeWifi(ssid: String) {
+    viewModelScope.launch {
+      settingsDataStore.setSmartSkipHomeWifi(
+        ssid
+      )
+    }
+  }
+
+  fun setSmartSkipHomeLocation(
+    lat: Double,
+    lng: Double,
+    radius: Int = 1000
+  ) {
+    viewModelScope.launch {
+      settingsDataStore.setSmartSkipHomeLocation(
+        lat,
+        lng,
+        radius.coerceAtLeast(1)
+      )
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Sound preview
-  // *----------------------------------*----------------------------------*----
+  // ---------------------------------------------------------------------------
 
-  fun previewSound(soundName* String) {
-    cancelSoundReplayJo*s()
-    soundPlayer.previewSound(s*undName)
+  fun previewSound(soundName: String) {
+    cancelSoundReplayJobs()
+    soundPlayer.previewSound(soundName)
   }
 
   /**
-   * Plays the*exact selected alarm or timer soun* briefly.
+   * Plays the selected sound URI briefly.
    */
-  fun previewSound*ri(uriString: String) {
-    cancel*oundReplayJobs()
-    soundPlayer.p*eviewSoundUri(uriString)
+  fun previewSoundUri(uriString: String) {
+    cancelSoundReplayJobs()
+    soundPlayer.previewSoundUri(uriString)
   }
 
-  fu* stopSound() {
-    cancelSoundRepl*yJobs()
-    soundPlayer.stopSound(*
+  fun stopSound() {
+    cancelSoundReplayJobs()
+    soundPlayer.stopSound()
   }
 
-  // -----------------------*----------------------------------*----------------
-  // Sound self-h*al
-  // --------------------------*----------------------------------*-------------
+  // ---------------------------------------------------------------------------
+  // Sound self-heal
+  // ---------------------------------------------------------------------------
 
   /**
-   * Restarts*alarm playback if the shared Sound*layer is not currently playing.
-  **
-   * Room and DataStore are read directly instead of relying on StateFlow.value.
-   * A WhileSubscribed StateFlow can still contain its initial value if no UI
-   * has started collecting it.
+   * Restarts alarm playback if the application-wide SoundPlayer is not
+   * currently playing.
+   *
+   * Room and DataStore are read directly because WhileSubscribed StateFlows
+   * can temporarily contain their initial values when no screen is collecting
+   * them.
    */
   fun replayAlarmSound(alarmId: Long) {
+    if (alarmId <= 0L) {
+      return
+    }
+
     if (soundPlayer.isSoundPlaying()) {
       return
     }
 
     /*
-     * Cancel an older pending request. This prevents two suspended replay
-     * requests from both reaching playAlarmSound().
+     * Cancel an existing lookup before starting another one. This prevents two
+     * suspended jobs from both reaching playAlarmSound().
      */
     alarmReplayJob?.cancel()
 
-  * alarmReplayJob = viewModelScope.l*unch {
+    alarmReplayJob = viewModelScope.launch {
       try {
-        if (sou*dPlayer.isSoundPlaying()) {
-      *   return@launch
+        if (soundPlayer.isSoundPlaying()) {
+          return@launch
         }
 
-      * val alarm = repository.allAlarms
-*         .first()
-          .first*rNull { candidate ->
-            c*ndidate.id == alarmId
-          }
-*        val shouldVibrate =
-      *   settingsDataStore.alarmVibrate.*irst()
+        val alarm =
+          repository.allAlarms
+            .first()
+            .firstOrNull { candidate ->
+              candidate.id == alarmId
+            }
 
-        val silenceAfter =*         *settingsDataStore.alarmSilenceAfte*.first()
+        val shouldVibrate =
+          settingsDataStore.alarmVibrate.first()
 
-        val gradualVolum* =
-          settingsDataStore.ala*mGradualVolume.first()
+        val silenceAfter =
+          settingsDataStore.alarmSilenceAfter.first()
+
+        val gradualVolume =
+          settingsDataStore.alarmGradualVolume.first()
 
         /*
-         * Reading Room and DataStore can suspend. Verify that the user is still
-         * viewing the same alarm-triggered screen before starting playback.
+         * Room and DataStore reads can suspend. Confirm that the user is still
+         * viewing this exact alarm screen before starting fallback playback.
          */
         val activeScreen = _currentScreen.value
 
@@ -756,8 +833,8 @@ class ClockViewModel(
         )
       } catch (e: CancellationException) {
         /*
-         * Cancellation is expected when the user dismisses, snoozes, or leaves
-         * the alarm screen. It must not trigger fallback playback.
+         * Dismiss, snooze, and navigation intentionally cancel this job. Never
+         * start fallback playback after cancellation.
          */
         throw e
       } catch (e: Exception) {
@@ -771,22 +848,30 @@ class ClockViewModel(
           !soundPlayer.isSoundPlaying()
         ) {
           /*
-           * Last-resort fallback. This uses the currently cached preferences
-           * and the system default sound if Room or DataStore cannot be read.
+           * Last-resort fallback. Use currently cached settings and the system
+           * default alarm sound if Room or DataStore cannot be read.
            */
           soundPlayer.playAlarmSound(
             customUri = "",
             vibrate = alarmVibrate.value,
-            silenceAfterMinutes = alarmSilenceAfter.value,
-            gradualVolumeSeconds = alarmGradualVolume.value
+            silenceAfterMinutes =
+              alarmSilenceAfter.value,
+            gradualVolumeSeconds =
+              alarmGradualVolume.value
           )
         }
+      } finally {
+        /*
+         * Do not cancel a newer replay job that may have replaced this one.
+         * The Job reference is primarily used for explicit cancellation.
+         */
       }
     }
   }
 
   /**
-   * Restarts timer-finished playback if the shared SoundPlayer is not playing.
+   * Restarts timer-finished playback if the application-wide SoundPlayer is
+   * not currently playing.
    */
   fun replayTimerSound() {
     if (soundPlayer.isSoundPlaying()) {
@@ -811,8 +896,8 @@ class ClockViewModel(
           settingsDataStore.timerGradualVolume.first()
 
         /*
-         * Do not start delayed playback if the user already dismissed or left
-         * the timer-finished screen while DataStore was being read.
+         * Do not start playback if the user left or dismissed the finished
+         * screen while DataStore was being read.
          */
         if (_currentScreen.value !is Screen.TimerFinished) {
           return@launch
@@ -829,8 +914,7 @@ class ClockViewModel(
         )
       } catch (e: CancellationException) {
         /*
-         * Never start fallback playback after this job was intentionally
-         * cancelled by dismiss, restart, reset, or navigation.
+         * Never start fallback audio after an intentional cancellation.
          */
         throw e
       } catch (e: Exception) {
@@ -843,7 +927,8 @@ class ClockViewModel(
           soundPlayer.playTimerFinishedSound(
             customUri = timerSoundUri.value,
             vibrate = timerVibrate.value,
-            gradualVolume = timerGradualVolume.value
+            gradualVolume =
+              timerGradualVolume.value
           )
         }
       }
@@ -856,6 +941,21 @@ class ClockViewModel(
 
     timerReplayJob?.cancel()
     timerReplayJob = null
+  }
+
+  // ---------------------------------------------------------------------------
+  // ViewModel cleanup
+  // ---------------------------------------------------------------------------
+
+  override fun onCleared() {
+    cancelSoundReplayJobs()
+
+    /*
+     * Do not stop active alarm/timer sound automatically here. A ViewModel can
+     * be cleared during Activity lifecycle transitions while AlarmReceiver or
+     * TimerService still legitimately owns active playback.
+     */
+    super.onCleared()
   }
 
   // ---------------------------------------------------------------------------
@@ -873,7 +973,11 @@ class ClockViewModel(
         override fun <T : ViewModel> create(
           modelClass: Class<T>
         ): T {
-          if (!modelClass.isAssignableFrom(ClockViewModel::class.java)) {
+          if (
+            !modelClass.isAssignableFrom(
+              ClockViewModel::class.java
+            )
+          ) {
             throw IllegalArgumentException(
               "Unknown ViewModel class: ${modelClass.name}"
             )
@@ -882,7 +986,8 @@ class ClockViewModel(
           return ClockViewModel(
             repository = container.alarmRepository,
             scheduler = container.alarmScheduler,
-            settingsDataStore = container.settingsDataStore,
+            settingsDataStore =
+              container.settingsDataStore,
             soundPlayer = container.soundPlayer,
             container = container
           ) as T
