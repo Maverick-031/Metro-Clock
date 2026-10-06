@@ -15,60 +15,82 @@ import app.metroclock.util.SoundPlayer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlin.coroutines.CoroutineContext
 
 /**
- * Application-level dependency container.
+ * Application-wide dependency container.
  *
- * This class must be created only once by the Application class. Creating a
- * separate AppContainer in an Activity, Service, or BroadcastReceiver would
- * also create separate SoundPlayer and TimerStateManager instances.
+ * ClockApplication must create exactly one AppContainer for the application
+ * process. Activities, services, receivers, and ViewModels must retrieve their
+ * dependencies from that shared container.
+ *
+ * Do not create additional AppContainer, SoundPlayer, or TimerStateManager
+ * instances in individual Android components.
  */
 class AppContainer(context: Context) {
 
   /**
-   * Always retain the application context.
+   * Retain only the application context.
    *
-   * This prevents the container and its long-lived dependencies from retaining
-   * an Activity, Service, or BroadcastReceiver context.
+   * This prevents application-wide dependencies from retaining an Activity,
+   * Service, or BroadcastReceiver context.
    */
-  private val appContext: Context = context.applicationContext
+  private val appContext: Context =
+    context.applicationContext
+
+  // ---------------------------------------------------------------------------
+  // Application coroutine scope
+  // ---------------------------------------------------------------------------
 
   private val applicationJob = SupervisorJob()
 
-  private val applicationCoroutineContext: CoroutineContext =
-    applicationJob + Dispatchers.Default
-
   /**
-   * Long-lived scope used by application-level dependencies.
+   * Long-lived application scope.
    *
-   * SupervisorJob prevents a failure in one child coroutine from cancelling
-   * unrelated application work.
+   * SupervisorJob ensures that a failure in one child coroutine does not
+   * automatically cancel unrelated application-level operations.
    */
   val applicationScope: CoroutineScope =
-    CoroutineScope(applicationCoroutineContext)
+    CoroutineScope(
+      applicationJob + Dispatchers.Default
+    )
+
+  // ---------------------------------------------------------------------------
+  // Database and repository
+  // ---------------------------------------------------------------------------
 
   /**
-   * Application database.
+   * Shared Room database instance.
    */
-  val database: AppDatabase by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+  val database: AppDatabase by lazy(
+    LazyThreadSafetyMode.SYNCHRONIZED
+  ) {
+    /*
+     * Positional parameters avoid compilation errors if the function's
+     * parameter names differ while its parameter types remain the same.
+     */
     AppDatabase.getDatabase(
-      context = appContext,
-      scope = applicationScope
+      appContext,
+      applicationScope
     )
   }
 
   /**
-   * Alarm database repository.
+   * Shared alarm repository.
    */
   val alarmRepository: AlarmRepository by lazy(
     LazyThreadSafetyMode.SYNCHRONIZED
   ) {
-    AlarmRepository(database.alarmDao())
+    AlarmRepository(
+      database.alarmDao()
+    )
   }
 
+  // ---------------------------------------------------------------------------
+  // Settings
+  // ---------------------------------------------------------------------------
+
   /**
-   * Persistent application settings.
+   * Shared DataStore settings provider.
    */
   val settingsDataStore: SettingsDataStore by lazy(
     LazyThreadSafetyMode.SYNCHRONIZED
@@ -76,8 +98,12 @@ class AppContainer(context: Context) {
     SettingsDataStore(appContext)
   }
 
+  // ---------------------------------------------------------------------------
+  // Alarm dependencies
+  // ---------------------------------------------------------------------------
+
   /**
-   * Alarm scheduling dependency.
+   * Shared alarm scheduler.
    */
   val alarmScheduler: AlarmScheduler by lazy(
     LazyThreadSafetyMode.SYNCHRONIZED
@@ -88,9 +114,9 @@ class AppContainer(context: Context) {
   /**
    * Shared application-level sound player.
    *
-   * Activities, ViewModels, services, and receivers should obtain this
-   * instance through the application's AppContainer. They must not construct
-   * another SoundPlayer directly if playback-state coordination is required.
+   * AlarmReceiver, TimerService, MainActivity, and ClockViewModel must use this
+   * exact instance. Creating another SoundPlayer would prevent
+   * isSoundPlaying() and stopSound() from coordinating playback correctly.
    */
   val soundPlayer: SoundPlayer by lazy(
     LazyThreadSafetyMode.SYNCHRONIZED
@@ -98,15 +124,23 @@ class AppContainer(context: Context) {
     SoundPlayer(appContext)
   }
 
+  // ---------------------------------------------------------------------------
+  // Smart Skip dependencies
+  // ---------------------------------------------------------------------------
+
   /**
-   * Smart Skip dependency.
+   * Shared Smart Skip manager.
    */
   val smartSkipManager: SmartSkipManager by lazy(
     LazyThreadSafetyMode.SYNCHRONIZED
   ) {
+    /*
+     * Positional parameters avoid dependency on the constructor's parameter
+     * names.
+     */
     SmartSkipManager(
-      context = appContext,
-      settingsDataStore = settingsDataStore
+      appContext,
+      settingsDataStore
     )
   }
 
@@ -116,11 +150,15 @@ class AppContainer(context: Context) {
   val calendarHelper: CalendarHelper
     get() = CalendarHelper
 
+  // ---------------------------------------------------------------------------
+  // Timer and stopwatch state
+  // ---------------------------------------------------------------------------
+
   /**
    * Shared in-process timer and stopwatch state.
    *
-   * TimerService must receive this same TimerStateManager through the
-   * application AppContainer. It must not create TimerStateManager() itself.
+   * TimerService and ClockViewModel must use this same instance. TimerService
+   * must not construct its own TimerStateManager.
    */
   val timerStateManager: TimerStateManager by lazy(
     LazyThreadSafetyMode.SYNCHRONIZED
@@ -132,40 +170,101 @@ class AppContainer(context: Context) {
   // Timer commands
   // ---------------------------------------------------------------------------
 
+  /**
+   * Starts or resumes the configured timer.
+   */
   fun startTimer() {
-    sendTimerServiceCommand(TimerService.ACTION_START_TIMER)
+    sendTimerServiceCommand(
+      TimerService.ACTION_START_TIMER
+    )
   }
 
+  /**
+   * Pauses the currently running timer.
+   */
   fun pauseTimer() {
-    sendTimerServiceCommand(TimerService.ACTION_PAUSE_TIMER)
+    sendTimerServiceCommand(
+      TimerService.ACTION_PAUSE_TIMER
+    )
   }
 
+  /**
+   * Resets the timer and stops any timer-finished audio.
+   */
   fun resetTimer() {
-    sendTimerServiceCommand(TimerService.ACTION_RESET_TIMER)
+    /*
+     * Stop immediately in the current process. TimerService will also perform
+     * cleanup when it receives ACTION_RESET_TIMER.
+     */
+    soundPlayer.stopSound()
+
+    sendTimerServiceCommand(
+      TimerService.ACTION_RESET_TIMER
+    )
+  }
+
+  /**
+   * Dismisses timer-finished playback and its notification.
+   */
+  fun dismissTimerFinished() {
+    /*
+     * Stop playback immediately rather than waiting for TimerService command
+     * processing. The service performs the remaining state and notification
+     * cleanup.
+     */
+    soundPlayer.stopSound()
+
+    sendTimerServiceCommand(
+      TimerService.ACTION_DISMISS_TIMER_FINISHED
+    )
+  }
+
+  /**
+   * Stops the finished alert and restarts the timer using its original
+   * configured duration.
+   */
+  fun restartFinishedTimer() {
+    soundPlayer.stopSound()
+
+    sendTimerServiceCommand(
+      TimerService.ACTION_RESTART_TIMER
+    )
   }
 
   // ---------------------------------------------------------------------------
   // Stopwatch commands
   // ---------------------------------------------------------------------------
 
+  /**
+   * Starts or resumes the stopwatch.
+   */
   fun startStopwatch() {
     sendTimerServiceCommand(
       TimerService.ACTION_START_STOPWATCH
     )
   }
 
+  /**
+   * Pauses the stopwatch.
+   */
   fun pauseStopwatch() {
     sendTimerServiceCommand(
       TimerService.ACTION_PAUSE_STOPWATCH
     )
   }
 
+  /**
+   * Resets the stopwatch.
+   */
   fun resetStopwatch() {
     sendTimerServiceCommand(
       TimerService.ACTION_RESET_STOPWATCH
     )
   }
 
+  /**
+   * Records a stopwatch lap.
+   */
   fun recordStopwatchLap() {
     sendTimerServiceCommand(
       TimerService.ACTION_LAP_STOPWATCH
@@ -173,18 +272,38 @@ class AppContainer(context: Context) {
   }
 
   // ---------------------------------------------------------------------------
-  // Service command handling
+  // General service control
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Stops TimerService and removes its active foreground notification.
+   *
+   * This also requests that TimerService stop timer-finished audio and remove
+   * its finished notification.
+   */
+  fun stopTimerService() {
+    soundPlayer.stopSound()
+
+    sendTimerServiceCommand(
+      TimerService.ACTION_STOP_SERVICE
+    )
+  }
+
+  // ---------------------------------------------------------------------------
+  // TimerService command dispatch
   // ---------------------------------------------------------------------------
 
   /**
    * Sends a supported command to TimerService.
    *
-   * Invalid or blank actions are ignored so an accidental caller cannot start
-   * the foreground service without a command it knows how to process.
+   * Returns true if Android accepted the service-start request. This does not
+   * guarantee that TimerService completed the requested operation.
    */
-  private fun sendTimerServiceCommand(action: String) {
+  private fun sendTimerServiceCommand(
+    action: String
+  ): Boolean {
     if (action !in SUPPORTED_TIMER_SERVICE_ACTIONS) {
-      return
+      return false
     }
 
     val serviceIntent =
@@ -192,34 +311,49 @@ class AppContainer(context: Context) {
         this.action = action
       }
 
-    try {
+    return try {
+      /*
+       * TimerService promotes itself promptly by calling startForeground().
+       * ContextCompat handles the correct foreground-service starting API for
+       * the running Android version.
+       */
       ContextCompat.startForegroundService(
         appContext,
         serviceIntent
       )
+
+      true
     } catch (e: SecurityException) {
       /*
-       * This can happen when a required foreground-service permission or
-       * declaration is missing.
+       * Possible causes include a missing foreground-service permission,
+       * incorrect service type declaration, or operating-system restrictions.
        */
       e.printStackTrace()
+      false
     } catch (e: IllegalStateException) {
       /*
-       * This can happen when Android does not allow the app to start a
-       * foreground service from its current background state.
+       * Android may reject a foreground-service start when the application is
+       * in a restricted background state.
        */
       e.printStackTrace()
+      false
     } catch (e: Exception) {
       /*
-       * Keep command failures from crashing the UI. TimerService should still
-       * log and expose command failures where appropriate.
+       * Service command failures should not crash the Activity or Compose UI.
        */
       e.printStackTrace()
+      false
     }
   }
 
   companion object {
 
+    /**
+     * Commands that AppContainer is allowed to send to TimerService.
+     *
+     * Keeping an allowlist prevents accidental startup with an unsupported or
+     * malformed command.
+     */
     private val SUPPORTED_TIMER_SERVICE_ACTIONS: Set<String> =
       setOf(
         TimerService.ACTION_START_TIMER,
