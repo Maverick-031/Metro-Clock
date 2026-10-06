@@ -1,6 +1,7 @@
 package app.metroclock
 
 import android.Manifest
+import android.app.KeyguardManager
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
@@ -21,6 +22,9 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
@@ -58,28 +62,17 @@ class MainActivity : ComponentActivity() {
     // Safety net: if the app process is recreated while no alarm/timer screen is shown,
     // make sure nothing keeps ringing or vibrating in the background.
     val app = application as ClockApplication
-    if (intent?.getStringExtra(EXTRA_DESTINATION) == null) {
+    val launchedByAlarmOrTimer = intent?.getStringExtra(EXTRA_DESTINATION) != null
+    if (!launchedByAlarmOrTimer) {
       app.container.soundPlayer.stopSound()
-    }
-
-    // Keep screen on and show over lock screen if triggered
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-      setShowWhenLocked(true)
-      setTurnScreenOn(true)
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        window.setDecorFitsSystemWindows(false)
-      }
     } else {
-      @Suppress("DEPRECATION")
-      window.addFlags(
-        WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-        WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
-        WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
-      )
+      // Show above the keyguard immediately (before first frame) so there is
+      // no flash of the lock screen. Managed per-screen below from then on.
+      setShowOverLockScreen(true)
     }
-
-    // Ensure window stays on for alarm/timer screens
-    window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      window.setDecorFitsSystemWindows(false)
+    }
     handleIncomingIntent(intent)
 
     setContent {
@@ -106,13 +99,42 @@ class MainActivity : ComponentActivity() {
       val smartSkipMode by viewModel.smartSkipMode.collectAsStateWithLifecycle()
       val smartSkipHomeWifi by viewModel.smartSkipHomeWifi.collectAsStateWithLifecycle()
 
-      // --- FIX: Sound handling. AlarmReceiver and TimerService already play the sound.
-      // We only need to stop the sound when the user leaves the screen.
+      // Sound + lock-screen window lifecycle.
+      // The receiver/service starts the sound; the activity must never kill it
+      // just because the current screen isn't a triggered one (the first
+      // composition can observe Main before navigation lands -- that was
+      // silencing the timer on the lock screen). We stop the sound only when
+      // LEAVING a triggered screen, and return the window to the keyguard.
+      var previousScreen by remember { mutableStateOf<Screen?>(null) }
+
       LaunchedEffect(currentScreen) {
         val appContext = application as ClockApplication
-        if (currentScreen !is Screen.AlarmTriggered && currentScreen !is Screen.TimerFinished) {
-          appContext.container.soundPlayer.stopSound()
+        val isTriggered = currentScreen is Screen.AlarmTriggered || currentScreen is Screen.TimerFinished
+        val wasTriggered = previousScreen is Screen.AlarmTriggered || previousScreen is Screen.TimerFinished
+
+        if (isTriggered) {
+          setShowOverLockScreen(true)
+          setKeepScreenOn(true)
+          // Self-heal: if the service/receiver was killed while the phone was
+          // locked, restart the sound so the alarm/timer never rings silently.
+          when (val s = currentScreen) {
+            is Screen.AlarmTriggered -> viewModel.replayAlarmSound(s.alarmId)
+            is Screen.TimerFinished -> viewModel.replayTimerSound()
+            else -> Unit
+          }
+        } else {
+          setKeepScreenOn(false)
+          if (wasTriggered) {
+            // Dismissed or snoozed: stop ringing and hand the window back to
+            // the keyguard instead of exposing the app behind the lock screen.
+            appContext.container.soundPlayer.stopSound()
+            setShowOverLockScreen(false)
+            if (keyguardManager.isKeyguardLocked) {
+              finish()
+            }
+          }
         }
+        previousScreen = currentScreen
       }
 
       // Runtime permission for notifications on Android 13+
@@ -258,6 +280,39 @@ class MainActivity : ComponentActivity() {
           }
         }
       }
+    }
+  }
+
+  private val keyguardManager by lazy {
+    getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+  }
+
+  // Show this window above the lock screen only while an alarm/timer is firing.
+  private fun setShowOverLockScreen(show: Boolean) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+      setShowWhenLocked(show)
+      setTurnScreenOn(show)
+    } else {
+      @Suppress("DEPRECATION")
+      if (show) {
+        window.addFlags(
+          WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+          WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+        )
+      } else {
+        window.clearFlags(
+          WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+          WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+        )
+      }
+    }
+  }
+
+  private fun setKeepScreenOn(keep: Boolean) {
+    if (keep) {
+      window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    } else {
+      window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
   }
 
