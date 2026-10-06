@@ -306,7 +306,7 @@ class AlarmScheduler(context: Context) {
         )
 
         putExtra(
-          AlarmReceiver.EXTRA_IS_SNOOZEP,
+          AlarmReceiver.EXTRA_IS_SNOOZE,
           true
         )        
       }
