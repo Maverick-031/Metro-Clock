@@ -2,14 +2,11 @@ package app.metroclock
 
 import android.Manifest
 import android.app.KeyguardManager
-import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.provider.Settings
 import android.view.KeyEvent
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -21,12 +18,14 @@ import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.metroclock.receiver.AlarmReceiver
@@ -44,134 +43,206 @@ import app.metroclock.ui.theme.MetroClockTheme
 class MainActivity : ComponentActivity() {
 
   companion object {
-    const val EXTRA_DESTINATION = "extra_destination"
-    const val DEST_ALARM_TRIGGERED = "dest_alarm_triggered"
-    const val DEST_TIMER_FINISHED = "dest_timer_finished"
-    const val EXTRA_TIMER_SECONDS = "extra_timer_seconds"
+
+    const val EXTRA_DESTINATION =
+      "extra_destination"
+
+    const val DEST_ALARM_TRIGGERED =
+      "dest_alarm_triggered"
+
+    const val DEST_TIMER_FINISHED =
+      "dest_timer_finished"
+
+    const val EXTRA_TIMER_SECONDS =
+      "extra_timer_seconds"
   }
 
+  private val appContainer: AppContainer
+    get() = (application as ClockApplication).container
+
   private val viewModel: ClockViewModel by viewModels {
-    val app = application as ClockApplication
-    ClockViewModel.provideFactory(app.container)
+    ClockViewModel.provideFactory(appContainer)
   }
+
+  private val keyguardManager: KeyguardManager by lazy {
+    getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+  }
+
+  // ---------------------------------------------------------------------------
+  // Activity lifecycle
+  // ---------------------------------------------------------------------------
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+
     enableEdgeToEdge()
 
-    // Safety net: if the app process is recreated while no alarm/timer screen is shown,
-    // make sure nothing keeps ringing or vibrating in the background.
-    val app = application as ClockApplication
-    val launchedByAlarmOrTimer = intent?.getStringExtra(EXTRA_DESTINATION) != null
-    if (!launchedByAlarmOrTimer) {
-      app.container.soundPlayer.stopSound()
+    val launchedForTriggeredScreen =
+      isAlarmOrTimerIntent(intent)
+
+    /*
+     * If the app was opened normally, clear any stale playback that may have
+     * survived an earlier Activity or UI state.
+     *
+     * Do not stop sound when the Activity was launched by an alarm or timer.
+     */
+    if (!launchedForTriggeredScreen) {
+      appContainer.soundPlayer.stopSound()
+      clearTriggeredWindowFlags()
     } else {
-      // Show above the keyguard immediately (before first frame) so there is
-      // no flash of the lock screen. Managed per-screen below from then on.
-      setShowOverLockScreen(true)
+      /*
+       * Apply these flags before the first Compose frame so the alarm or timer
+       * UI can appear above the lock screen without flashing the keyguard.
+       */
+      showTriggeredWindow()
     }
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-      window.setDecorFitsSystemWindows(false)
-    }
+
+    /*
+     * Process the Activity intent before creating the Compose UI. This ensures
+     * the first composition receives the correct destination.
+     *
+     * handleIncomingIntent() also starts self-heal playback if the receiver or
+     * service did not already start it.
+     */
     handleIncomingIntent(intent)
 
     setContent {
-      val selectedAccent by viewModel.selectedAccent.collectAsStateWithLifecycle()
-      val useDynamicColor by viewModel.useDynamicColor.collectAsStateWithLifecycle()
-      val isLightTheme by viewModel.isLightTheme.collectAsStateWithLifecycle()
-      val currentScreen by viewModel.currentScreen.collectAsStateWithLifecycle()
-      val alarms by viewModel.alarms.collectAsStateWithLifecycle()
+      val selectedAccent by
+        viewModel.selectedAccent.collectAsStateWithLifecycle()
 
-      // Alarm Settings state
-      val alarmVibrate by viewModel.alarmVibrate.collectAsStateWithLifecycle()
-      val alarmSilenceAfter by viewModel.alarmSilenceAfter.collectAsStateWithLifecycle()
-      val alarmSnoozeLength by viewModel.alarmSnoozeLength.collectAsStateWithLifecycle()
-      val alarmGradualVolume by viewModel.alarmGradualVolume.collectAsStateWithLifecycle()
-      val alarmVolumeButtons by viewModel.alarmVolumeButtons.collectAsStateWithLifecycle()
+      val useDynamicColor by
+        viewModel.useDynamicColor.collectAsStateWithLifecycle()
 
-      // Timer Settings state
-      val timerSoundTitle by viewModel.timerSoundTitle.collectAsStateWithLifecycle()
-      val timerGradualVolume by viewModel.timerGradualVolume.collectAsStateWithLifecycle()
-      val timerVibrate by viewModel.timerVibrate.collectAsStateWithLifecycle()
+      val isLightTheme by
+        viewModel.isLightTheme.collectAsStateWithLifecycle()
 
-      // Smart Skip state
-      val smartSkipEnabled by viewModel.smartSkipEnabled.collectAsStateWithLifecycle()
-      val smartSkipMode by viewModel.smartSkipMode.collectAsStateWithLifecycle()
-      val smartSkipHomeWifi by viewModel.smartSkipHomeWifi.collectAsStateWithLifecycle()
+      val currentScreen by
+        viewModel.currentScreen.collectAsStateWithLifecycle()
 
-      // Sound + lock-screen window lifecycle.
-      // The receiver/service starts the sound; the activity must never kill it
-      // just because the current screen isn't a triggered one (the first
-      // composition can observe Main before navigation lands -- that was
-      // silencing the timer on the lock screen). We stop the sound only when
-      // LEAVING a triggered screen, and return the window to the keyguard.
-      var previousScreen by remember { mutableStateOf<Screen?>(null) }
+      val alarms by
+        viewModel.alarms.collectAsStateWithLifecycle()
+
+      // -----------------------------------------------------------------------
+      // Alarm settings
+      // -----------------------------------------------------------------------
+
+      val alarmVibrate by
+        viewModel.alarmVibrate.collectAsStateWithLifecycle()
+
+      val alarmSilenceAfter by
+        viewModel.alarmSilenceAfter.collectAsStateWithLifecycle()
+
+      val alarmSnoozeLength by
+        viewModel.alarmSnoozeLength.collectAsStateWithLifecycle()
+
+      val alarmGradualVolume by
+        viewModel.alarmGradualVolume.collectAsStateWithLifecycle()
+
+      val alarmVolumeButtons by
+        viewModel.alarmVolumeButtons.collectAsStateWithLifecycle()
+
+      // -----------------------------------------------------------------------
+      // Timer settings
+      // -----------------------------------------------------------------------
+
+      val timerSoundTitle by
+        viewModel.timerSoundTitle.collectAsStateWithLifecycle()
+
+      val timerGradualVolume by
+        viewModel.timerGradualVolume.collectAsStateWithLifecycle()
+
+      val timerVibrate by
+        viewModel.timerVibrate.collectAsStateWithLifecycle()
+
+      // -----------------------------------------------------------------------
+      // Smart Skip settings
+      // -----------------------------------------------------------------------
+
+      val smartSkipEnabled by
+        viewModel.smartSkipEnabled.collectAsStateWithLifecycle()
+
+      val smartSkipMode by
+        viewModel.smartSkipMode.collectAsStateWithLifecycle()
+
+      val smartSkipHomeWifi by
+        viewModel.smartSkipHomeWifi.collectAsStateWithLifecycle()
+
+      // -----------------------------------------------------------------------
+      // Notification permission
+      // -----------------------------------------------------------------------
+
+      NotificationPermissionRequest()
+
+      // -----------------------------------------------------------------------
+      // Triggered-screen window management
+      // -----------------------------------------------------------------------
+
+      /*
+       * Track the previous screen so sound is stopped only when leaving an
+       * alarm or timer screen.
+       *
+       * Sound replay is intentionally not started here. Compose effects may be
+       * recreated. Playback self-healing is performed once for every incoming
+       * Activity intent in handleIncomingIntent().
+       */
+      var previousScreen by remember {
+        mutableStateOf<Screen?>(null)
+      }
 
       LaunchedEffect(currentScreen) {
-        val appContext = application as ClockApplication
-        val isTriggered = currentScreen is Screen.AlarmTriggered || currentScreen is Screen.TimerFinished
-        val wasTriggered = previousScreen is Screen.AlarmTriggered || previousScreen is Screen.TimerFinished
+        val isTriggeredScreen =
+          currentScreen is Screen.AlarmTriggered ||
+            currentScreen is Screen.TimerFinished
 
-        if (isTriggered) {
-          setShowOverLockScreen(true)
-          setKeepScreenOn(true)
-          // Self-heal: if the service/receiver was killed while the phone was
-          // locked, restart the sound so the alarm/timer never rings silently.
-          when (val s = currentScreen) {
-            is Screen.AlarmTriggered -> viewModel.replayAlarmSound(s.alarmId)
-            is Screen.TimerFinished -> viewModel.replayTimerSound()
-            else -> Unit
-          }
+        val wasTriggeredScreen =
+          previousScreen is Screen.AlarmTriggered ||
+            previousScreen is Screen.TimerFinished
+
+        if (isTriggeredScreen) {
+          showTriggeredWindow()
         } else {
           setKeepScreenOn(false)
-          if (wasTriggered) {
-            // Dismissed or snoozed: stop ringing and hand the window back to
-            // the keyguard instead of exposing the app behind the lock screen.
-            appContext.container.soundPlayer.stopSound()
+
+          if (wasTriggeredScreen) {
+            /*
+             * The ViewModel dismiss and snooze functions already stop sound.
+             * This is an additional safety cleanup using the same shared
+             * application-level SoundPlayer.
+             */
+            appContainer.soundPlayer.stopSound()
             setShowOverLockScreen(false)
+
+            /*
+             * If the device is still locked, finish the Activity after the
+             * alarm or timer is dismissed. This returns control to the
+             * keyguard instead of exposing the normal app screen.
+             */
             if (keyguardManager.isKeyguardLocked) {
               finish()
             }
+          } else {
+            setShowOverLockScreen(false)
           }
         }
+
         previousScreen = currentScreen
       }
 
-      // Runtime permission for notifications on Android 13+
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        val permissionLauncher = rememberLauncherForActivityResult(
-          ActivityResultContracts.RequestPermission()
-        ) { /* Granted or denied handled gracefully */ }
-
-        LaunchedEffect(Unit) {
-          if (ContextCompat.checkSelfPermission(
-              this@MainActivity,
-              Manifest.permission.POST_NOTIFICATIONS
-            ) != PackageManager.PERMISSION_GRANTED
-          ) {
-            permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-          }
+      /*
+       * Always remove KEEP_SCREEN_ON when this Compose UI leaves composition.
+       *
+       * We deliberately do not stop sound here because composition can be
+       * destroyed during a configuration change while an alarm is active.
+       */
+      DisposableEffect(Unit) {
+        onDispose {
+          setKeepScreenOn(false)
         }
       }
 
-      // --- FIX: Android 14+ Full Screen Intent Permission ---
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-        LaunchedEffect(Unit) {
-          val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-          if (!notificationManager.canUseFullScreenIntent()) {
-            // Redirect user to the settings page to grant full-screen intent permission
-            try {
-              val intent = Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT).apply {
-                data = Uri.parse("package:$packageName")
-              }
-              startActivity(intent)
-            } catch (e: Exception) {
-              e.printStackTrace()
-            }
-          }
-        }
-      }
-      // ----------------------------------------------------
+      // -----------------------------------------------------------------------
+      // Main UI
+      // -----------------------------------------------------------------------
 
       MetroClockTheme(
         accentColor = selectedAccent.color,
@@ -180,28 +251,58 @@ class MainActivity : ComponentActivity() {
       ) {
         Surface(
           modifier = Modifier.fillMaxSize(),
-          color = if (isLightTheme) androidx.compose.ui.graphics.Color.White else MetroBlack
+          color = if (isLightTheme) {
+            Color.White
+          } else {
+            MetroBlack
+          }
         ) {
           AnimatedContent(
             targetState = currentScreen,
-            transitionSpec = metroTurnstileTransition(),
+            transitionSpec = {
+              metroTurnstileTransition()
+            },
             label = "MetroScreenTurnstile"
           ) { screen ->
             when (screen) {
-              is Screen.Main -> {
+              Screen.Main -> {
                 MainClockScreen(
                   viewModel = viewModel,
-                  onNavigateToSettings = { viewModel.navigateTo(Screen.Settings) },
-                  onNavigateToAddAlarm = { viewModel.navigateTo(Screen.AddEditAlarm(null)) },
-                  onNavigateToEditAlarm = { alarmId -> viewModel.navigateTo(Screen.AddEditAlarm(alarmId)) }
+                  onNavigateToSettings = {
+                    viewModel.navigateTo(Screen.Settings)
+                  },
+                  onNavigateToAddAlarm = {
+                    viewModel.navigateTo(
+                      Screen.AddEditAlarm(null)
+                    )
+                  },
+                  onNavigateToEditAlarm = { alarmId ->
+                    viewModel.navigateTo(
+                      Screen.AddEditAlarm(alarmId)
+                    )
+                  }
                 )
               }
 
               is Screen.AddEditAlarm -> {
-                val existing = alarms.firstOrNull { it.id == screen.alarmId }
+                val existingAlarm =
+                  alarms.firstOrNull { alarm ->
+                    alarm.id == screen.alarmId
+                  }
+
                 AddEditAlarmScreen(
-                  existingAlarm = existing,
-                  onSave = { hour, minute, name, repeats, sound, soundUri, snooze, skipCalendar, smartSkip ->
+                  existingAlarm = existingAlarm,
+                  onSave = {
+                      hour,
+                      minute,
+                      name,
+                      repeats,
+                      sound,
+                      soundUri,
+                      snooze,
+                      skipCalendar,
+                      smartSkip ->
+
                     viewModel.saveAlarm(
                       id = screen.alarmId,
                       hour = hour,
@@ -215,45 +316,86 @@ class MainActivity : ComponentActivity() {
                       smartSkipLocation = smartSkip
                     )
                   },
-                  onDelete = if (existing != null) {
-                    { viewModel.deleteAlarm(existing) }
-                  } else null,
-                  onCancel = { viewModel.navigateBack() },
-                  onPreviewSound = { uri -> viewModel.previewSoundUri(uri) }
+                  onDelete = if (existingAlarm != null) {
+                    {
+                      viewModel.deleteAlarm(existingAlarm)
+                    }
+                  } else {
+                    null
+                  },
+                  onCancel = {
+                    viewModel.navigateBack()
+                  },
+                  onPreviewSound = { uri ->
+                    viewModel.previewSoundUri(uri)
+                  }
                 )
               }
 
-              is Screen.Settings -> {
+              Screen.Settings -> {
                 SettingsScreen(
                   selectedAccent = selectedAccent,
                   useDynamicColor = useDynamicColor,
                   isLightTheme = isLightTheme,
-                  onSelectAccent = { id -> viewModel.selectAccentColor(id) },
-                  onToggleDynamicColor = { useDyn -> viewModel.setUseDynamicColor(useDyn) },
-                  onToggleLightTheme = { isLight -> viewModel.setLightTheme(isLight) },
+                  onSelectAccent = { accentId ->
+                    viewModel.selectAccentColor(accentId)
+                  },
+                  onToggleDynamicColor = { enabled ->
+                    viewModel.setUseDynamicColor(enabled)
+                  },
+                  onToggleLightTheme = { enabled ->
+                    viewModel.setLightTheme(enabled)
+                  },
                   alarmVibrate = alarmVibrate,
-                  onToggleAlarmVibrate = { viewModel.setAlarmVibrate(it) },
+                  onToggleAlarmVibrate = { enabled ->
+                    viewModel.setAlarmVibrate(enabled)
+                  },
                   alarmSilenceAfter = alarmSilenceAfter,
-                  onSelectSilenceAfter = { viewModel.setAlarmSilenceAfter(it) },
+                  onSelectSilenceAfter = { value ->
+                    viewModel.setAlarmSilenceAfter(value)
+                  },
                   alarmSnoozeLength = alarmSnoozeLength,
-                  onUpdateSnoozeLength = { viewModel.setAlarmSnoozeLength(it) },
+                  onUpdateSnoozeLength = { minutes ->
+                    viewModel.setAlarmSnoozeLength(minutes)
+                  },
                   alarmGradualVolume = alarmGradualVolume,
-                  onSelectGradualVolume = { viewModel.setAlarmGradualVolume(it) },
+                  onSelectGradualVolume = { seconds ->
+                    viewModel.setAlarmGradualVolume(seconds)
+                  },
                   alarmVolumeButtons = alarmVolumeButtons,
-                  onSelectVolumeButtons = { viewModel.setAlarmVolumeButtons(it) },
+                  onSelectVolumeButtons = { action ->
+                    viewModel.setAlarmVolumeButtons(action)
+                  },
                   smartSkipEnabled = smartSkipEnabled,
-                  onToggleSmartSkip = { viewModel.setSmartSkipEnabled(it) },
+                  onToggleSmartSkip = { enabled ->
+                    viewModel.setSmartSkipEnabled(enabled)
+                  },
                   smartSkipMode = smartSkipMode,
-                  onSelectSmartSkipMode = { viewModel.setSmartSkipMode(it) },
+                  onSelectSmartSkipMode = { mode ->
+                    viewModel.setSmartSkipMode(mode)
+                  },
                   smartSkipHomeWifi = smartSkipHomeWifi,
-                  onUpdateHomeWifi = { viewModel.setSmartSkipHomeWifi(it) },
+                  onUpdateHomeWifi = { ssid ->
+                    viewModel.setSmartSkipHomeWifi(ssid)
+                  },
                   timerSoundTitle = timerSoundTitle,
-                  onSelectTimerSound = { uri, title -> viewModel.setTimerSound(uri, title) },
+                  onSelectTimerSound = { uri, title ->
+                    viewModel.setTimerSound(
+                      uri = uri,
+                      title = title
+                    )
+                  },
                   timerGradualVolume = timerGradualVolume,
-                  onToggleTimerGradualVolume = { viewModel.setTimerGradualVolume(it) },
+                  onToggleTimerGradualVolume = { enabled ->
+                    viewModel.setTimerGradualVolume(enabled)
+                  },
                   timerVibrate = timerVibrate,
-                  onToggleTimerVibrate = { viewModel.setTimerVibrate(it) },
-                  onBack = { viewModel.navigateBack() }
+                  onToggleTimerVibrate = { enabled ->
+                    viewModel.setTimerVibrate(enabled)
+                  },
+                  onBack = {
+                    viewModel.navigateBack()
+                  }
                 )
               }
 
@@ -264,16 +406,28 @@ class MainActivity : ComponentActivity() {
                   hour = screen.hour,
                   minute = screen.minute,
                   snoozeMinutes = screen.snoozeMinutes,
-                  onSnooze = { mins -> viewModel.snoozeAlarm(screen.alarmId, screen.alarmName, mins) },
-                  onDismiss = { viewModel.dismissAlarm() }
+                  onSnooze = { minutes ->
+                    viewModel.snoozeAlarm(
+                      alarmId = screen.alarmId,
+                      name = screen.alarmName,
+                      minutes = minutes
+                    )
+                  },
+                  onDismiss = {
+                    viewModel.dismissAlarm()
+                  }
                 )
               }
 
               is Screen.TimerFinished -> {
                 TimerFinishedScreen(
                   totalSeconds = screen.totalSeconds,
-                  onRestart = { viewModel.restartTimer() },
-                  onDismiss = { viewModel.dismissTimerFinished() }
+                  onRestart = {
+                    viewModel.restartTimer()
+                  },
+                  onDismiss = {
+                    viewModel.dismissTimerFinished()
+                  }
                 )
               }
             }
@@ -283,11 +437,196 @@ class MainActivity : ComponentActivity() {
     }
   }
 
-  private val keyguardManager by lazy {
-    getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+
+    /*
+     * singleTop causes new notification/alarm intents to arrive here when this
+     * Activity already exists.
+     */
+    setIntent(intent)
+    handleIncomingIntent(intent)
   }
 
-  // Show this window above the lock screen only while an alarm/timer is firing.
+  // ---------------------------------------------------------------------------
+  // Intent handling
+  // ---------------------------------------------------------------------------
+
+  private fun handleIncomingIntent(incomingIntent: Intent?) {
+    val destination =
+      incomingIntent?.getStringExtra(EXTRA_DESTINATION) ?: return
+
+    when (destination) {
+      DEST_ALARM_TRIGGERED -> {
+        val alarmId = incomingIntent.getLongExtra(
+          AlarmReceiver.EXTRA_ALARM_ID,
+          0L
+        )
+
+        /*
+         * Ignore malformed alarm intents. A valid Room alarm ID should be
+         * greater than zero.
+         */
+        if (alarmId <= 0L) {
+          return
+        }
+
+        val alarmName =
+          incomingIntent.getStringExtra(
+            AlarmReceiver.EXTRA_ALARM_NAME
+          )
+            ?.trim()
+            ?.takeIf { name -> name.isNotEmpty() }
+            ?: "Alarm"
+
+        val hour = incomingIntent.getIntExtra(
+          AlarmReceiver.EXTRA_ALARM_HOUR,
+          0
+        ).coerceIn(0, 23)
+
+        val minute = incomingIntent.getIntExtra(
+          AlarmReceiver.EXTRA_ALARM_MINUTE,
+          0
+        ).coerceIn(0, 59)
+
+        val snoozeMinutes = incomingIntent.getIntExtra(
+          AlarmReceiver.EXTRA_SNOOZE_MINUTES,
+          10
+        ).coerceAtLeast(1)
+
+        val screen = Screen.AlarmTriggered(
+          alarmId = alarmId,
+          alarmName = alarmName,
+          hour = hour,
+          minute = minute,
+          snoozeMinutes = snoozeMinutes
+        )
+
+        showTriggeredWindow()
+
+        /*
+         * navigateTo updates the StateFlow synchronously. replayAlarmSound()
+         * can therefore confirm that this exact triggered screen is active.
+         */
+        viewModel.navigateTo(screen)
+        viewModel.replayAlarmSound(alarmId)
+      }
+
+      DEST_TIMER_FINISHED -> {
+        val totalSeconds = incomingIntent.getIntExtra(
+          EXTRA_TIMER_SECONDS,
+          0
+        ).coerceAtLeast(0)
+
+        val screen = Screen.TimerFinished(
+          totalSeconds = totalSeconds
+        )
+
+        showTriggeredWindow()
+        viewModel.navigateTo(screen)
+        viewModel.replayTimerSound()
+      }
+
+      else -> {
+        /*
+         * Ignore unknown destinations. Do not stop current audio because an
+         * unrelated or stale intent must not dismiss an active alarm.
+         */
+      }
+    }
+  }
+
+  private fun isAlarmOrTimerIntent(intent: Intent?): Boolean {
+    return when (
+      intent?.getStringExtra(EXTRA_DESTINATION)
+    ) {
+      DEST_ALARM_TRIGGERED,
+      DEST_TIMER_FINISHED -> true
+
+      else -> false
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Hardware buttons
+  // ---------------------------------------------------------------------------
+
+  override fun onKeyDown(
+    keyCode: Int,
+    event: KeyEvent?
+  ): Boolean {
+    val isVolumeButton =
+      keyCode == KeyEvent.KEYCODE_VOLUME_DOWN ||
+        keyCode == KeyEvent.KEYCODE_VOLUME_UP
+
+    if (!isVolumeButton) {
+      return super.onKeyDown(keyCode, event)
+    }
+
+    val activeScreen = viewModel.currentScreen.value
+
+    if (activeScreen !is Screen.AlarmTriggered) {
+      return super.onKeyDown(keyCode, event)
+    }
+
+    /*
+     * Normalize the stored setting so values such as "Do Nothing" and
+     * "do nothing" behave identically.
+     */
+    return when (
+      viewModel.alarmVolumeButtons.value
+        .trim()
+        .lowercase()
+    ) {
+      "snooze" -> {
+        viewModel.snoozeAlarm(
+          alarmId = activeScreen.alarmId,
+          name = activeScreen.alarmName,
+          minutes = activeScreen.snoozeMinutes
+        )
+
+        true
+      }
+
+      "stop",
+      "dismiss" -> {
+        viewModel.dismissAlarm()
+        true
+      }
+
+      "do nothing",
+      "nothing",
+      "ignore" -> {
+        /*
+         * Consume the event without changing audio or alarm state.
+         */
+        true
+      }
+
+      else -> {
+        super.onKeyDown(keyCode, event)
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Window and keyguard handling
+  // ---------------------------------------------------------------------------
+
+  private fun showTriggeredWindow() {
+    setShowOverLockScreen(true)
+    setKeepScreenOn(true)
+  }
+
+  private fun clearTriggeredWindowFlags() {
+    setKeepScreenOn(false)
+    setShowOverLockScreen(false)
+  }
+
+  /**
+   * Shows this Activity above the keyguard only while an alarm or timer is
+   * active.
+   */
   private fun setShowOverLockScreen(show: Boolean) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
       setShowWhenLocked(show)
@@ -297,84 +636,60 @@ class MainActivity : ComponentActivity() {
       if (show) {
         window.addFlags(
           WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-          WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+            WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
         )
       } else {
         window.clearFlags(
           WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-          WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+            WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
         )
       }
     }
   }
 
-  private fun setKeepScreenOn(keep: Boolean) {
-    if (keep) {
-      window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+  private fun setKeepScreenOn(keepScreenOn: Boolean) {
+    if (keepScreenOn) {
+      window.addFlags(
+        WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+      )
     } else {
-      window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+      window.clearFlags(
+        WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+      )
     }
   }
 
-  override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-    val currentScreen = viewModel.currentScreen.value
-    if (currentScreen is Screen.AlarmTriggered) {
-      if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
-        val action = viewModel.alarmVolumeButtons.value
-        when (action) {
-          "snooze" -> {
-            viewModel.snoozeAlarm(
-              currentScreen.alarmId,
-              currentScreen.alarmName,
-              currentScreen.snoozeMinutes
-            )
-            return true
-          }
-          "stop" -> {
-            viewModel.dismissAlarm()
-            return true
-          }
-          "do nothing" -> {
-            return true
-          }
-          else -> {
-            return super.onKeyDown(keyCode, event)
-          }
-        }
+  // ---------------------------------------------------------------------------
+  // Compose permission request
+  // ---------------------------------------------------------------------------
+
+  @androidx.compose.runtime.Composable
+  private fun NotificationPermissionRequest() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+      return
+    }
+
+    val notificationPermissionLauncher =
+      rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+      ) {
+        /*
+         * A denied notification permission is handled gracefully. Alarm and
+         * timer settings can provide another contextual explanation later.
+         */
       }
-    }
-    return super.onKeyDown(keyCode, event)
-  }
 
-  override fun onNewIntent(intent: Intent) {
-    super.onNewIntent(intent)
-    setIntent(intent)
-    handleIncomingIntent(intent)
-  }
+    LaunchedEffect(Unit) {
+      val permissionGranted =
+        ContextCompat.checkSelfPermission(
+          this@MainActivity,
+          Manifest.permission.POST_NOTIFICATIONS
+        ) == PackageManager.PERMISSION_GRANTED
 
-  private fun handleIncomingIntent(intent: Intent?) {
-    if (intent == null) return
-    val destination = intent.getStringExtra(EXTRA_DESTINATION)
-    when (destination) {
-      DEST_ALARM_TRIGGERED -> {
-        val alarmId = intent.getLongExtra(AlarmReceiver.EXTRA_ALARM_ID, 0L)
-        val alarmName = intent.getStringExtra(AlarmReceiver.EXTRA_ALARM_NAME) ?: "Alarm"
-        val hour = intent.getIntExtra(AlarmReceiver.EXTRA_ALARM_HOUR, 12)
-        val minute = intent.getIntExtra(AlarmReceiver.EXTRA_ALARM_MINUTE, 0)
-        val snooze = intent.getIntExtra(AlarmReceiver.EXTRA_SNOOZE_MINUTES, 10)
-        viewModel.navigateTo(
-          Screen.AlarmTriggered(
-            alarmId = alarmId,
-            alarmName = alarmName,
-            hour = hour,
-            minute = minute,
-            snoozeMinutes = snooze
-          )
+      if (!permissionGranted) {
+        notificationPermissionLauncher.launch(
+          Manifest.permission.POST_NOTIFICATIONS
         )
-      }
-      DEST_TIMER_FINISHED -> {
-        val seconds = intent.getIntExtra(EXTRA_TIMER_SECONDS, 60)
-        viewModel.navigateTo(Screen.TimerFinished(seconds))
       }
     }
   }
