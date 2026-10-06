@@ -223,4 +223,7 @@ class TimerStateManager {
           isFinished = false,
           endTimestampMillis = 0L
         )
+      }
+    }
+  } 
  
