@@ -1,6 +1,7 @@
 package app.metroclock.util
 
 import android.content.Context
+import android.database.Cursor
 import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.media.Ringtone
@@ -14,36 +15,67 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 
-class SoundPlayer(private val context: Context) {
+class SoundPlayer(context: Context) {
 
   companion object {
+
     /**
-     * Waveform format: [initial delay, vibrate ON, pause OFF, vibrate ON, ...]
+     * Waveform format:
+     * [initial delay, vibrate ON, pause OFF, vibrate ON, ...]
      */
-    private val ALARM_VIBRATION_PATTERN = longArrayOf(0, 1000, 1000)
-    private val TIMER_VIBRATION_PATTERN = longArrayOf(0, 400, 200, 400, 2000)
+    private val ALARM_VIBR*TION_PATTERN =
+      longArrayOf(0*, 1000L, 1000L)
+
+    private val T*MER_VIBRATION_PATTERN =
+      longArrayOf(0L, 400L, 200L, 400L, 2000L)
 
     private const val PREVIEW_DURATION_MS = 5000L
+    private const val TIMER_FADE_DURATION_SECONDS = 5
+    private const val VOLUME_FADE_STEPS = 20
+
+    private const val MIN_FADE_VOLUME = 0.05f
+    private const val TIMER_INITIAL_VOLUME = 0.10f
+    private const val MAX_VOLUME = 1.0f
   }
 
-  private var currentRingtone: Ringtone? = null
-  private var currentMediaPlayer: MediaPlayer? = null
+  /*
+   * Use the application context so this class does not accidentally retain
+   * an Activity, Service, or other short-lived Context.
+   */
+  private val appContext = context.applicationContext
+
   private val handler = Handler(Looper.getMainLooper())
+
+  private var currentMediaPlayer: MediaPlayer? = null
+  private var currentRingtone: Ringtone? = null
+
+  /*
+   * Ringtone.isPlaying is not available on every Android version supported by
+   * many projects. This flag also gives replay logic a consistent local state.
+   */
+  @Volatile
+  private var audioPlaybackActive = false
+
   private var volumeFadeRunnable: Runnable? = null
   private var autoSilenceRunnable: Runnable? = null
 
-  // Vibration keep-alive state
+  // Vibration keep-alive state.
   private var activeVibrationPattern: LongArray? = null
   private var vibrationKeepAliveRunnable: Runnable? = null
 
   private val vibrator: Vibrator? by lazy {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
       val vibratorManager =
-        context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
+        appContext.getSystemService(
+          Context.VIBRATOR_MANAGER_SERVICE
+        ) as? VibratorManager
+
       vibratorManager?.defaultVibrator
     } else {
       @Suppress("DEPRECATION")
-      context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+      appContext.getSystemService(
+        Context.VIBRATOR_SERVICE
+      ) as? Vibrator
     }
   }
 
@@ -51,6 +83,18 @@ class SoundPlayer(private val context: Context) {
   // Public API
   // ---------------------------------------------------------------------------
 
+  /**
+   * Starts alarm audio and optionally starts repeating vibration.
+   *
+   * [customUri] may be blank, in which case the system default alarm,
+   * notification, or ringtone sound is used.
+   *
+   * [silenceAfterMinutes] should contain a number. A blank, invalid, zero,
+   * negative, or "never" value disables automatic silence.
+   *
+   * [gradualVolumeSeconds] should contain a number. A blank, invalid, zero,
+   * negative, or "never" value disables gradual volume.
+   */
   fun playAlarmSound(
     customUri: String = "",
     vibrate: Boolean = true,
@@ -58,300 +102,631 @@ class SoundPlayer(private val context: Context) {
     gradualVolumeSeconds: String = "never"
   ) {
     stopSound()
-    try {
-      val parsedCustomUri = if (customUri.isNotBlank()) Uri.parse(customUri) else null
-      val alarmUri: Uri = parsedCustomUri
-        ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-        ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-        ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
 
-      val gradualSecs = gradualVolumeSeconds.toIntOrNull() ?: 0
+    val alarmUri = resolveAlarmUri(customUri)
 
-      if (gradualSecs > 0) {
-        // Use MediaPlayer for gradual volume fade-in
-        currentMediaPlayer = MediaPlayer().apply {
-          setAudioAttributes(
-            AudioAttributes.Builder()
-              .setUsage(AudioAttributes.USAGE_ALARM)
-              .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-              .build()
-          )
-          setDataSource(context, alarmUri)
-          isLooping = true
-          setVolume(0.05f, 0.05f)
-          prepare()
-          start()
-        }
-        startVolumeFade(gradualSecs)
-      } else {
-        currentRingtone = RingtoneManager.getRingtone(context, alarmUri)?.apply {
-          audioAttributes = AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_ALARM)
-            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-            .build()
-          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            isLooping = true
-          }
-          play()
-        }
+    if (alarmUri != null) {
+      val gradualSeconds =
+        gradualVolumeSeconds.toIntOrNull()?.coerceAtLeast(0) ?: 0
+
+      val initialVolume =
+        if (gradualSeconds > 0) MIN_FADE_VOLUME else MAX_VOLUME
+
+      val started = startLoopingMediaPlayer(
+        uri = alarmUri,
+        initialVolume = initialVolume
+      )
+
+      if (started && gradualSeconds > 0) {
+        startVolumeFade(
+          durationSeconds = gradualSeconds,
+          initialVolume = MIN_FADE_VOLUME
+        )
       }
+    }
 
-      if (vibrate) {
-        startVibration(ALARM_VIBRATION_PATTERN)
-      }
+    /*
+     * Vibration remains independent from audio. This allows vibration to work
+     * even if the device has no usable default alarm sound.
+     */
+    if (vibrate) {
+      startVibration(ALARM_VIBRATION_PATTERN)
+    }
 
-      // Schedule auto-silence
-      val silenceMinutes = silenceAfterMinutes.toIntOrNull() ?: 0
-      if (silenceMinutes > 0) {
-        autoSilenceRunnable = Runnable { stopSound() }
-        handler.postDelayed(autoSilenceRunnable!!, silenceMinutes * 60 * 1000L)
+    val silenceMinutes =
+      silenceAfterMinutes.toLongOrNull()?.coerceAtLeast(0L) ?: 0L
+
+    if (silenceMinutes > 0L) {
+      val delayMillis = safeMinutesToMillis(silenceMinutes)
+
+      if (delayMillis > 0L) {
+        scheduleAutoSilence(delayMillis)
       }
-    } catch (e: Exception) {
-      e.printStackTrace()
     }
   }
 
+  /**
+   * Starts the timer-finished sound and optionally starts repeating vibration.
+   */
   fun playTimerFinishedSound(
     customUri: String = "",
     vibrate: Boolean = true,
     gradualVolume: Boolean = false
   ) {
     stopSound()
-    try {
-      val customParsed = if (customUri.isNotBlank()) {
-        try {
-          Uri.parse(customUri)
-        } catch (e: Exception) {
-          null
-        }
+
+    val timerUri = resolveTimerUri(customUri)
+
+    if (timerUri != null) {
+      val initialVolume =
+        if (gradualVolume) TIMER_INITIAL_VOLUME else MAX_VOLUME
+
+      val started = startLoopingMediaPlayer(
+        uri = timerUri,
+        initialVolume = initialVolume
+      )
+
+      if (started && gradualVolume) {
+        startVolumeFade(
+          durationSeconds = TIMER_FADE_DURATION_SECONDS,
+          initialVolume = TIMER_INITIAL_VOLUME
+        )
+      }
+    }
+
+    if (vibrate) {
+      startVibration(TIMER_VIBRATION_PATTERN)
+    }
+  }
+
+  /**
+   * Plays a preview of the selected sound.
+   *
+   * Resolution order:
+   *
+   * 1. Blank or "default" uses the default notification or alarm sound.
+   * 2. A content URI, file URI, android.resource URI, or absolute path is used.
+   * 3. Other values are matched against installed system sound titles.
+   * 4. If no title matches, the default notification or alarm sound is used.
+   */
+  fun previewSound(
+    soundName: String,
+    durationMillis: Long = PREVIEW_DURATION_MS
+  ) {
+    stopSound()
+
+    val soundUri = resolvePreviewUri(soundName) ?: return
+
+    playRingtonePreview(
+      uri = soundUri,
+      durationMillis = durationMillis
+    )
+  }
+
+  /**
+   * Plays a URI preview using MediaPlayer.
+   *
+   * If MediaPlayer cannot play the URI, this method attempts a Ringtone
+   * fallback.
+   */
+  fun previewSoundUri(
+    uriString: String,
+    durationMillis: Long = 3000L
+  ) {
+    stopSound()
+
+    if (uriString.isBlank()) {
+      return
+    }
+
+    val uri = parsePlayableUri(uriString) ?: return
+    val safeDuration = durationMillis.coerceAtLeast(0L)
+
+    if (startPreviewMediaPlayer(uri)) {
+      if (safeDuration == 0L) {
+        stopSound()
       } else {
-        null
+        scheduleAutoSilence(safeDuration)
       }
 
-      val soundUri: Uri? = customParsed
-        ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-        ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-
-      if (soundUri == null) return
-
-      currentMediaPlayer = MediaPlayer().apply {
-        setAudioAttributes(
-          AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_ALARM)
-            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-            .build()
-        )
-        setDataSource(context, soundUri)
-        isLooping = true
-        if (gradualVolume) setVolume(0.1f, 0.1f)
-        prepare()
-        start()
-      }
-      if (gradualVolume) {
-        startVolumeFade(5)
-      }
-
-      if (vibrate) {
-        startVibration(TIMER_VIBRATION_PATTERN)
-      }
-    } catch (e: Exception) {
-      e.printStackTrace()
+      return
     }
+
+    playRingtonePreview(
+      uri = uri,
+      durationMillis = safeDuration
+    )
   }
 
   /**
-   * Plays a preview of the selected sound. Resolves [soundName] as follows:
-   * 1. Blank / "default" -> default notification sound
-   * 2. A content:// or file:// URI (or absolute path) -> played directly
-   * 3. Otherwise -> matched by title against system alarm/notification/ringtone sounds
-   * 4. Falls back to the default notification sound if nothing matches
+   * Returns true when this SoundPlayer instance currently owns active audio.
+   *
+   * Important: this only detects playback started by this exact SoundPlayer
+   * instance. A separate SoundPlayer created by another receiver, service, or
+   * ViewModel has separate playback state.
    */
-  fun previewSound(soundName: String, durationMillis: Long = PREVIEW_DURATION_MS) {
-    stopSound()
-    try {
-      val uri = resolvePreviewUri(soundName) ?: return
-      currentRingtone = RingtoneManager.getRingtone(context, uri)?.apply {
-        audioAttributes = AudioAttributes.Builder()
-          .setUsage(AudioAttributes.USAGE_NOTIFICATION)
-          .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-          .build()
-        play()
-      }
-      autoSilenceRunnable = Runnable { stopSound() }
-      handler.postDelayed(autoSilenceRunnable!!, durationMillis)
-    } catch (e: Exception) {
-      e.printStackTrace()
+  fun isSoundPlaying(): Boolean {
+    val mediaPlayerPlaying = try {
+      currentMediaPlayer?.isPlaying == true
+    } catch (_: IllegalStateException) {
+      false
+    } catch (_: Exception) {
+      false
     }
-  }
 
-  fun previewSoundUri(uriString: String, durationMillis: Long = 3000L) {
-    stopSound()
-    if (uriString.isBlank()) return
-
-    // FIX #4 – track whether MediaPlayer succeeded so the catch block
-    //          doesn't schedule a second, stale autoSilenceRunnable.
-    var playedViaMediaPlayer = false
-
-    try {
-      val parsedUri = Uri.parse(uriString)
-      currentMediaPlayer = MediaPlayer().apply {
-        setAudioAttributes(
-          AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_ALARM)
-            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-            .build()
-        )
-        setDataSource(context, parsedUri)
-        prepare()
-        setOnCompletionListener { stopSound() }
-        start()
-      }
-      playedViaMediaPlayer = true
-
-      autoSilenceRunnable = Runnable { stopSound() }
-      handler.postDelayed(autoSilenceRunnable!!, durationMillis)
-    } catch (e: Exception) {
-      if (playedViaMediaPlayer) return   // MediaPlayer already handled it
-      try {
-        currentRingtone = RingtoneManager.getRingtone(context, Uri.parse(uriString))?.apply {
-          play()
-        }
-        autoSilenceRunnable = Runnable { stopSound() }
-        handler.postDelayed(autoSilenceRunnable!!, durationMillis)
-      } catch (e2: Exception) {
-        e2.printStackTrace()
-      }
-    }
+    return mediaPlayerPlaying ||
+      (currentRingtone != null && audioPlaybackActive)
   }
 
   /**
-   * FIX #1 – required by ViewModel's replayAlarmSound() / replayTimerSound().
-   * Returns true if either a MediaPlayer or a Ringtone is actively playing.
-   */
-  fun isSoundPlaying(): Boolean = try {
-    (currentMediaPlayer?.isPlaying == true) || (currentRingtone?.isPlaying == true)
-  } catch (e: Exception) {
-    false
-  }
-
-  /**
-   * FIX #3 – each resource is now cleaned up in its own try/catch so a
-   *          failure in one (e.g. Ringtone.stop() throwing
-   *          IllegalStateException) can no longer skip vibration cleanup.
+   * Stops audio, pending callbacks, gradual volume, auto-silence, and
+   * vibration.
    */
   fun stopSound() {
-    // 1. Cancel pending runnables first (safe, no throw)
-    volumeFadeRunnable?.let { handler.removeCallbacks(it) }
-    volumeFadeRunnable = null
+    cancelVolumeFade()
+    cancelAutoSilence()
 
-    autoSilenceRunnable?.let { handler.removeCallbacks(it) }
-    autoSilenceRunnable = null
+    /*
+     * Clear references before stopping resources. This prevents callbacks from
+     * seeing a resource that is already being released.
+     */
+    val mediaPlayer = currentMediaPlayer
+    currentMediaPlayer = null
 
-    // 2. MediaPlayer
+    val ringtone = currentRingtone
+    currentRingtone = null
+
+    audioPlaybackActive = false
+
+    if (mediaPlayer != null) {
+      try {
+        mediaPlayer.setOnCompletionListener(null)
+        mediaPlayer.setOnErrorListener(null)
+      } catch (_: Exception) {
+      }
+
+      try {
+        if (mediaPlayer.isPlaying) {
+          mediaPlayer.stop()
+        }
+      } catch (e: Exception) {
+        e.printStackTrace()
+      }
+
+      try {
+        mediaPlayer.reset()
+      } catch (_: Exception) {
+      }
+
+      try {
+        mediaPlayer.release()
+      } catch (e: Exception) {
+        e.printStackTrace()
+      }
+    }
+
+    if (ringtone != null) {
+      try {
+        ringtone.stop()
+      } catch (e: Exception) {
+        e.printStackTrace()
+      }
+    }
+
+    stopVibration()
+  }
+
+  // ---------------------------------------------------------------------------
+  // MediaPlayer
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Starts a looping MediaPlayer for an alarm or timer.
+   */
+  private fun startLoopingMediaPlayer(
+    uri: Uri,
+    initialVolume: Float
+  ): Boolean {
+    val mediaPlayer = MediaPlayer()
+
+    return try {
+      mediaPlayer.setAudioAttributes(createAlarmAudioAttributes())
+      mediaPlayer.setDataSource(appContext, uri)
+      mediaPlayer.isLooping = true
+
+      val safeInitialVolume =
+        initialVolume.coerceIn(MIN_FADE_VOLUME, MAX_VOLUME)
+
+      mediaPlayer.setVolume(
+        safeInitialVolume,
+        safeInitialVolume
+      )
+
+      mediaPlayer.setOnErrorListener { player, _, _ ->
+        if (currentMediaPlayer === player) {
+          stopSound()
+        } else {
+          safelyReleaseMediaPlayer(player)
+        }
+
+        true
+      }
+
+      mediaPlayer.prepare()
+      mediaPlayer.start()
+
+      currentMediaPlayer = mediaPlayer
+      audioPlaybackActive = true
+
+      true
+    } catch (e: Exception) {
+      e.printStackTrace()
+      safelyReleaseMediaPlayer(mediaPlayer)
+
+      if (currentMediaPlayer === mediaPlayer) {
+        currentMediaPlayer = null
+      }
+
+      audioPlaybackActive = false
+      false
+    }
+  }
+
+  /**
+   * Starts a non-looping MediaPlayer for preview playback.
+   */
+  private fun startPreviewMediaPlayer(uri: Uri): Boolean {
+    val mediaPlayer = MediaPlayer()
+
+    return try {
+      mediaPlayer.setAudioAttributes(createPreviewAudioAttributes())
+      mediaPlayer.setDataSource(appContext, uri)
+      mediaPlayer.isLooping = false
+
+      mediaPlayer.setOnCompletionListener { completedPlayer ->
+        if (currentMediaPlayer === completedPlayer) {
+          stopSound()
+        } else {
+          safelyReleaseMediaPlayer(completedPlayer)
+        }
+      }
+
+      mediaPlayer.setOnErrorListener { failedPlayer, _, _ ->
+        if (currentMediaPlayer === failedPlayer) {
+          stopSound()
+        } else {
+          safelyReleaseMediaPlayer(failedPlayer)
+        }
+
+        true
+      }
+
+      mediaPlayer.prepare()
+      mediaPlayer.start()
+
+      currentMediaPlayer = mediaPlayer
+      audioPlaybackActive = true
+
+      true
+    } catch (e: Exception) {
+      e.printStackTrace()
+      safelyReleaseMediaPlayer(mediaPlayer)
+
+      if (currentMediaPlayer === mediaPlayer) {
+        currentMediaPlayer = null
+      }
+
+      audioPlaybackActive = false
+      false
+    }
+  }
+
+  private fun safelyReleaseMediaPlayer(mediaPlayer: MediaPlayer) {
     try {
-      currentMediaPlayer?.let {
-        if (it.isPlaying) it.stop()
-        it.release()
+      mediaPlayer.setOnCompletionListener(null)
+      mediaPlayer.setOnErrorListener(null)
+    } catch (_: Exception) {
+    }
+
+    try {
+      mediaPlayer.reset()
+    } catch (_: Exception) {
+    }
+
+    try {
+      mediaPlayer.release()
+    } catch (_: Exception) {
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Ringtone preview
+  // ---------------------------------------------------------------------------
+
+  private fun playRingtonePreview(
+    uri: Uri,
+    durationMillis: Long
+  ) {
+    val safeDuration = durationMillis.coerceAtLeast(0L)
+
+    try {
+      val ringtone =
+        RingtoneManager.getRingtone(appContext, uri) ?: return
+
+      ringtone.audioAttributes = createPreviewAudioAttributes()
+      ringtone.play()
+
+      currentRingtone = ringtone
+      audioPlaybackActive = true
+
+      if (safeDuration == 0L) {
+        stopSound()
+      } else {
+        scheduleAutoSilence(safeDuration)
       }
     } catch (e: Exception) {
       e.printStackTrace()
-    }
-    currentMediaPlayer = null
 
-    // 3. Ringtone  (can throw IllegalStateException if never fully initialised)
-    try {
-      currentRingtone?.stop()
-    } catch (e: Exception) {
-      e.printStackTrace()
+      currentRingtone = null
+      audioPlaybackActive = false
     }
-    currentRingtone = null
-
-    // 4. Vibration – always reached now, even if Ringtone.stop() threw
-    stopVibration()
   }
 
   // ---------------------------------------------------------------------------
   // Volume fade
   // ---------------------------------------------------------------------------
 
-  private fun startVolumeFade(durationSeconds: Int) {
-    val steps = 20
-    val intervalMillis = (durationSeconds * 1000L) / steps
+  private fun startVolumeFade(
+    durationSeconds: Int,
+    initialVolume: Float
+  ) {
+    cancelVolumeFade()
+
+    if (durationSeconds <= 0) {
+      setCurrentMediaPlayerVolume(MAX_VOLUME)
+      return
+    }
+
+    val durationMillis = durationSeconds * 1000L
+
+    val intervalMillis =
+      (durationMillis / VOLUME_FADE_STEPS).coerceAtLeast(1L)
+
+    val startingVolume =
+      initialVolume.coerceIn(MIN_FADE_VOLUME, MAX_VOLUME)
+
     var currentStep = 1
 
     volumeFadeRunnable = object : Runnable {
       override fun run() {
-        val mp = currentMediaPlayer ?: return
-        if (currentStep <= steps) {
-          val vol = (currentStep.toFloat() / steps.toFloat()).coerceIn(0.05f, 1.0f)
+        val mediaPlayer = currentMediaPlayer ?: return
+
+        if (currentStep > VOLUME_FADE_STEPS) {
           try {
-            mp.setVolume(vol, vol)
+            mediaPlayer.setVolume(MAX_VOLUME, MAX_VOLUME)
           } catch (e: Exception) {
             e.printStackTrace()
           }
-          currentStep++
+
+          volumeFadeRunnable = null
+          return
+        }
+
+        val progress =
+          currentStep.toFloat() / VOLUME_FADE_STEPS.toFloat()
+
+        val volume =
+          (
+            startingVolume +
+              ((MAX_VOLUME - startingVolume) * progress)
+            ).coerceIn(startingVolume, MAX_VOLUME)
+
+        try {
+          mediaPlayer.setVolume(volume, volume)
+        } catch (e: Exception) {
+          e.printStackTrace()
+          volumeFadeRunnable = null
+          return
+        }
+
+        currentStep++
+
+        if (currentStep <= VOLUME_FADE_STEPS) {
           handler.postDelayed(this, intervalMillis)
+        } else {
+          try {
+            mediaPlayer.setVolume(MAX_VOLUME, MAX_VOLUME)
+          } catch (e: Exception) {
+            e.printStackTrace()
+          }
+
+          volumeFadeRunnable = null
         }
       }
     }
-    handler.postDelayed(volumeFadeRunnable!!, intervalMillis)
+
+    handler.postDelayed(
+      volumeFadeRunnable!!,
+      intervalMillis
+    )
+  }
+
+  private fun setCurrentMediaPlayerVolume(volume: Float) {
+    val safeVolume = volume.coerceIn(0f, MAX_VOLUME)
+
+    try {
+      currentMediaPlayer?.setVolume(
+        safeVolume,
+        safeVolume
+      )
+    } catch (e: Exception) {
+      e.printStackTrace()
+    }
+  }
+
+  private fun cancelVolumeFade() {
+    volumeFadeRunnable?.let(handler::removeCallbacks)
+    volumeFadeRunnable = null
   }
 
   // ---------------------------------------------------------------------------
-  // URI resolution helpers
+  // Auto-silence
   // ---------------------------------------------------------------------------
+
+  private fun scheduleAutoSilence(delayMillis: Long) {
+    cancelAutoSilence()
+
+    if (delayMillis <= 0L) {
+      return
+    }
+
+    autoSilenceRunnable = Runnable {
+      stopSound()
+    }
+
+    handler.postDelayed(
+      autoSilenceRunnable!!,
+      delayMillis
+    )
+  }
+
+  private fun cancelAutoSilence() {
+    autoSilenceRunnable?.let(handler::removeCallbacks)
+    autoSilenceRunnable = null
+  }
+
+  private fun safeMinutesToMillis(minutes: Long): Long {
+    if (minutes <= 0L) {
+      return 0L
+    }
+
+    val maxSafeMinutes = Long.MAX_VALUE / 60_000L
+
+    return if (minutes > maxSafeMinutes) {
+      Long.MAX_VALUE
+    } else {
+      minutes * 60_000L
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // URI resolution
+  // ---------------------------------------------------------------------------
+
+  private fun resolveAlarmUri(customUri: String): Uri? {
+    parsePlayableUri(customUri)?.let {
+      return it
+    }
+
+    return RingtoneManager.getDefaultUri(
+      RingtoneManager.TYPE_ALARM
+    ) ?: RingtoneManager.getDefaultUri(
+      RingtoneManager.TYPE_NOTIFICATION
+    ) ?: RingtoneManager.getDefaultUri(
+      RingtoneManager.TYPE_RINGTONE
+    )
+  }
+
+  private fun resolveTimerUri(customUri: String): Uri? {
+    parsePlayableUri(customUri)?.let {
+      return it
+    }
+
+    return RingtoneManager.getDefaultUri(
+      RingtoneManager.TYPE_NOTIFICATION
+    ) ?: RingtoneManager.getDefaultUri(
+      RingtoneManager.TYPE_ALARM
+    ) ?: RingtoneManager.getDefaultUri(
+      RingtoneManager.TYPE_RINGTONE
+    )
+  }
 
   private fun resolvePreviewUri(soundName: String): Uri? {
-    if (soundName.isBlank() || soundName.equals("default", ignoreCase = true)) {
-      return RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-        ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-    }
-
-    // 1. Looks like a URI or absolute path?
-    val parsed = try {
-      Uri.parse(soundName)
-    } catch (e: Exception) {
-      null
-    }
-    if (parsed != null &&
-      (parsed.scheme == "content" || parsed.scheme == "file" || soundName.startsWith("/"))
+    if (
+      soundName.isBlank() ||
+      soundName.equals("default", ignoreCase = true)
     ) {
-      return parsed
+      return RingtoneManager.getDefaultUri(
+        RingtoneManager.TYPE_NOTIFICATION
+      ) ?: RingtoneManager.getDefaultUri(
+        RingtoneManager.TYPE_ALARM
+      )
     }
 
-    // 2. Try to match a system sound by its title (e.g. "Platinum", "Lunar")
-    findByTitle(soundName)?.let { return it }
+    parsePlayableUri(soundName)?.let {
+      return it
+    }
 
-    // 3. Fall back to default
-    return RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-      ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+    findByTitle(soundName)?.let {
+      return it
+    }
+
+    return RingtoneManager.getDefaultUri(
+      RingtoneManager.TYPE_NOTIFICATION
+    ) ?: RingtoneManager.getDefaultUri(
+      RingtoneManager.TYPE_ALARM
+    )
   }
 
-  /**
-   * FIX #2 – cursor is now closed in a finally block so it can't leak
-   *          if an exception is thrown mid-iteration.
-   */
-  private fun findByTitle(title: String): Uri? {
-    var cursor: android.database.Cursor? = null
+  private fun parsePlayableUri(value: String): Uri? {
+    if (value.isBlank()) {
+      return null
+    }
+
     return try {
-      val manager = RingtoneManager(context)
-      manager.setType(
+      if (value.startsWith("/")) {
+        Uri.fromFile(java.io.File(value))
+      } else {
+        val parsedUri = Uri.parse(value)
+
+        when (parsedUri.scheme?.lowercase()) {
+          "content",
+          "file",
+          "android.resource" -> parsedUri
+
+          else -> null
+        }
+      }
+    } catch (e: Exception) {
+      e.printStackTrace()
+      null
+    }
+  }
+
+  private fun findByTitle(title: String): Uri? {
+    var cursor: Cursor? = null
+
+    return try {
+      val ringtoneManager = RingtoneManager(appContext)
+
+      ringtoneManager.setType(
         RingtoneManager.TYPE_NOTIFICATION or
           RingtoneManager.TYPE_ALARM or
           RingtoneManager.TYPE_RINGTONE
       )
-      cursor = manager.cursor
-      var found: Uri? = null
-      if (cursor.moveToFirst()) {
+
+      cursor = ringtoneManager.cursor
+
+      if (!cursor.moveToFirst()) {
+        null
+      } else {
+        var foundUri: Uri? = null
+
         do {
-          val soundTitle = cursor.getString(RingtoneManager.TITLE_COLUMN_INDEX)
-          if (soundTitle?.equals(title, ignoreCase = true) == true) {
-            found = manager.getRingtoneUri(cursor.position)
+          val soundTitle = cursor.getString(
+            RingtoneManager.TITLE_COLUMN_INDEX
+          )
+
+          if (soundTitle.equals(title, ignoreCase = true)) {
+            foundUri = ringtoneManager.getRingtoneUri(
+              cursor.position
+            )
             break
           }
         } while (cursor.moveToNext())
+
+        foundUri
       }
-      found
     } catch (e: Exception) {
       e.printStackTrace()
       null
@@ -364,57 +739,118 @@ class SoundPlayer(private val context: Context) {
   }
 
   // ---------------------------------------------------------------------------
+  // Audio attributes
+  // ---------------------------------------------------------------------------
+
+  private fun createAlarmAudioAttributes(): AudioAttributes {
+    return AudioAttributes.Builder()
+      .setUsage(AudioAttributes.USAGE_ALARM)
+      .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+      .build()
+  }
+
+  private fun createPreviewAudioAttributes(): AudioAttributes {
+    return AudioAttributes.Builder()
+      .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+      .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+      .build()
+  }
+
+  // ---------------------------------------------------------------------------
   // Vibration
   // ---------------------------------------------------------------------------
 
   /**
-   * Starts a repeating vibration pattern and schedules a keep-alive that
-   * re-asserts it periodically, in case another app cancels our vibration
-   * (e.g. an incoming notification). The re-assert interval is a multiple of
-   * the pattern length, so restarts are seamless.
+   * Starts repeating vibration and periodically reasserts it.
+   *
+   * The keep-alive helps restore the alarm vibration if another vibration
+   * temporarily interrupts it.
    */
   private fun startVibration(pattern: LongArray) {
-    val vib = vibrator ?: return
-    if (!vib.hasVibrator()) return
+    val currentVibrator = vibrator ?: return
 
-    // Cancel any previous keep-alive before starting fresh
-    vibrationKeepAliveRunnable?.let { handler.removeCallbacks(it) }
-    activeVibrationPattern = pattern
+    if (!currentVibrator.hasVibrator()) {
+      return
+    }
 
+    stopVibration()
+
+    activeVibrationPattern = pattern.copyOf()
     vibrateNow(pattern)
 
-    val keepAliveIntervalMs = (pattern.sum() * 2).coerceIn(4000L, 10000L)
+    val patternDuration = pattern.sum().coerceAtLeast(1L)
+
+    val keepAliveIntervalMillis =
+      (patternDuration * 2L).coerceIn(
+        4000L,
+        10_000L
+      )
+
     vibrationKeepAliveRunnable = object : Runnable {
       override fun run() {
-        val currentPattern = activeVibrationPattern ?: return
+        val currentPattern =
+          activeVibrationPattern ?: return
+
         vibrateNow(currentPattern)
-        handler.postDelayed(this, keepAliveIntervalMs)
+
+        if (activeVibrationPattern != null) {
+          handler.postDelayed(
+            this,
+            keepAliveIntervalMillis
+          )
+        }
       }
     }
-    handler.postDelayed(vibrationKeepAliveRunnable!!, keepAliveIntervalMs)
+
+    handler.postDelayed(
+      vibrationKeepAliveRunnable!!,
+      keepAliveIntervalMillis
+    )
   }
 
   private fun vibrateNow(pattern: LongArray) {
-    val vib = vibrator ?: return
-    try {
-      // repeat = 0 -> loop the entire pattern forever.
-      val repeatingEffect = VibrationEffect.createWaveform(pattern, 0)
+    val currentVibrator = vibrator ?: return
 
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        val attributes = VibrationAttributes.Builder()
-          .setUsage(VibrationAttributes.USAGE_ALARM)
-          .build()
-        vib.vibrate(repeatingEffect, attributes)
-      } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        val audioAttrs = AudioAttributes.Builder()
-          .setUsage(AudioAttributes.USAGE_ALARM)
-          .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-          .build()
-        @Suppress("DEPRECATION")
-        vib.vibrate(repeatingEffect, audioAttrs)
+    try {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        val repeatingEffect =
+          VibrationEffect.createWaveform(pattern, 0)
+
+        if (
+          Build.VERSION.SDK_INT >=
+          Build.VERSION_CODES.TIRAMISU
+        ) {
+          val vibrationAttributes =
+            VibrationAttributes.Builder()
+              .setUsage(VibrationAttributes.USAGE_ALARM)
+              .build()
+
+          currentVibrator.vibrate(
+            repeatingEffect,
+            vibrationAttributes
+          )
+        } else {
+          val audioAttributes =
+            AudioAttributes.Builder()
+              .setUsage(AudioAttributes.USAGE_ALARM)
+              .setContentType(
+                AudioAttributes.CONTENT_TYPE_SONIFICATION
+              )
+              .build()
+
+          @Suppress("DEPRECATION")
+          currentVibrator.vibrate(
+            repeatingEffect,
+            audioAttributes
+          )
+        }
       } else {
+        /*
+         * The second argument is the repeat index. Zero means repeat the
+         * complete waveform from its first element.
+         */
         @Suppress("DEPRECATION")
-        vib.vibrate(pattern, 0)
+        currentVibrator.vibrate(pattern, 0)
       }
     } catch (e: Exception) {
       e.printStackTrace()
@@ -423,8 +859,12 @@ class SoundPlayer(private val context: Context) {
 
   private fun stopVibration() {
     activeVibrationPattern = null
-    vibrationKeepAliveRunnable?.let { handler.removeCallbacks(it) }
+
+    vibrationKeepAliveRunnable?.let(
+      handler::removeCallbacks
+    )
     vibrationKeepAliveRunnable = null
+
     try {
       vibrator?.cancel()
     } catch (e: Exception) {
