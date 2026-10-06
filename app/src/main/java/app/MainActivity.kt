@@ -260,7 +260,7 @@ class MainActivity : ComponentActivity() {
           AnimatedContent(
             targetState = currentScreen,
             transitionSpec = {
-              metroTurnstileTransition()
+              metroTurnstileTransition<Screen>()
             },
             label = "MetroScreenTurnstile"
           ) { screen ->
