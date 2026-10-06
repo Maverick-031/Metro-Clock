@@ -533,7 +533,6 @@ class ClockViewModel(
      */
     soundPlayer.stopSound()
     container.timerStateManager.dismissTimerFinished()
-    container.dismissTimerFinished()
 
     _currentScreen.value = Screen.Main
   }
