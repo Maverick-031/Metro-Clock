@@ -111,6 +111,10 @@ class ClockViewModel(
   val timerSoundTitle: StateFlow<String> = settingsDataStore.timerSoundTitle
     .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "Default Sound")
 
+  // Stored URI of the selected timer sound ("" = app default)
+  val timerSoundUri: StateFlow<String> = settingsDataStore.timerSoundUri
+    .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+
   val timerGradualVolume: StateFlow<Boolean> = settingsDataStore.timerGradualVolume
     .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
@@ -383,6 +387,32 @@ class ClockViewModel(
 
   fun stopSound() {
     soundPlayer.stopSound()
+  }
+
+  // --- Sound self-heal -------------------------------------------------------
+  // Called by MainActivity when the AlarmTriggered screen appears. If the
+  // receiver was killed while the phone was locked, the sound never started --
+  // this restarts it. Skips silently if the sound is already playing so there
+  // is never a double-play or restart glitch.
+  fun replayAlarmSound(alarmId: Long) {
+    if (soundPlayer.isSoundPlaying()) return
+    val alarm = alarms.value.firstOrNull { it.id == alarmId }
+    soundPlayer.playAlarmSound(
+      customUri = alarm?.soundUri ?: "",
+      vibrate = alarmVibrate.value,
+      silenceAfterMinutes = alarmSilenceAfter.value,
+      gradualVolumeSeconds = alarmGradualVolume.value
+    )
+  }
+
+  // Same self-heal for the timer-finished screen.
+  fun replayTimerSound() {
+    if (soundPlayer.isSoundPlaying()) return
+    soundPlayer.playTimerFinishedSound(
+      customUri = timerSoundUri.value,
+      vibrate = timerVibrate.value,
+      gradualVolume = timerGradualVolume.value
+    )
   }
 
   // Factory
