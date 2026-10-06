@@ -226,4 +226,144 @@ class TimerStateManager {
       }
     }
   }
+
+  /**
+   * Marks the timer as running or not running.
+   *
+   * When starting, the target end timestamp is stored so the UI can display
+   * the expected completion time. When stopping, a paused state is preserved
+   * while the end timestamp is cleared.
+   */
+  fun setTimerRunning(
+    isRunning: Boolean,
+    endTimeMillis: Long = 0L
+  ) {
+    _timerState.update { current ->
+      if (isRunning) {
+        current.copy(
+          isRunning = true,
+          isPaused = false,
+          isFinished = false,
+          endTimestampMillis = endTimeMillis
+        )
+      } else {
+        current.copy(
+          isRunning = false,
+          isPaused = current.remainingSeconds > 0,
+          endTimestampMillis = 0L
+        )
+      }
+    }
+  }
+
+  /**
+   * Updates the remaining seconds on every timer tick.
+   *
+   * The value is clamped to the valid range and marks the timer as finished
+   * once the remaining time reaches zero.
+   */
+  fun updateTimerTick(remainingSeconds: Int) {
+    _timerState.update { current ->
+      val safeRemaining =
+        remainingSeconds.coerceIn(0, current.totalSeconds)
+
+      current.copy(
+        remainingSeconds = safeRemaining,
+        isFinished = safeRemaining == 0
+      )
+    }
+  }
+
+  /**
+   * Resets the timer back to its original duration and clears all transient
+   * running/paused/finished state.
+   */
+  fun resetTimer() {
+    _timerState.update { current ->
+      TimerUiState(
+        totalSeconds = current.totalSeconds,
+        remainingSeconds = current.totalSeconds,
+        isRunning = false,
+        isPaused = false,
+        isFinished = false,
+        endTimestampMillis = 0L
+      )
+    }
+  }
+
+  /**
+   * Dismisses the finished-timer state, restoring the original duration so
+   * the timer can be started again.
+   */
+  fun dismissTimerFinished() {
+    _timerState.update { current ->
+      current.copy(
+        remainingSeconds = current.totalSeconds,
+        isRunning = false,
+        isPaused = false,
+        isFinished = false,
+        endTimestampMillis = 0L
+      )
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Stopwatch operations
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Marks the stopwatch as running or not running.
+   */
+  fun setStopwatchRunning(isRunning: Boolean) {
+    _stopwatchState.update { current ->
+      current.copy(isRunning = isRunning)
+    }
+  }
+
+  /**
+   * Updates elapsed and current-lap times on every stopwatch tick.
+   */
+  fun updateStopwatchTick(
+    elapsedMillis: Long,
+    currentLapElapsedMillis: Long
+  ) {
+    _stopwatchState.update { current ->
+      current.copy(
+        elapsedMillis = elapsedMillis.coerceAtLeast(0L),
+        currentLapElapsedMillis =
+          currentLapElapsedMillis.coerceAtLeast(0L)
+      )
+    }
+  }
+
+  /**
+   * Records a lap for the stopwatch.
+   *
+   * The recorded lap time is the elapsed time since the previous lap, and the
+   * current-lap counter restarts from zero.
+   */
+  fun recordStopwatchLap() {
+    _stopwatchState.update { current ->
+      val lapNumber = current.laps.size + 1
+
+      val lap =
+        StopwatchLap(
+          lapNumber = lapNumber,
+          lapTimeMillis = current.currentLapElapsedMillis,
+          totalTimeMillis = current.elapsedMillis
+        )
+
+      current.copy(
+        laps = current.laps + lap,
+        currentLapElapsedMillis = 0L
+      )
+    }
+  }
+
+  /**
+   * Stops the stopwatch and clears all elapsed time and recorded laps.
+   */
+  fun resetStopwatch() {
+    _stopwatchState.value = StopwatchUiState()
+  }
 }

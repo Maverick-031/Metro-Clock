@@ -197,7 +197,7 @@ class TimerService : Service() {
       }
 
       ACTION_LAP_STOPWATCH -> {
-        stateManager.recordLap()
+        stateManager.recordStopwatchLap()
         updateActiveNotification()
       }
 
