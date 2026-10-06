@@ -304,6 +304,11 @@ class AlarmScheduler(context: Context) {
           AlarmReceiver.EXTRA_SMART_SKIP,
           smartSkipLocation
         )
+
+        putExtra(
+          AlarmReceiver.EXTRA_IS_SNOOZEP,
+          true
+        )        
       }
 
     val snoozePendingIntent =
