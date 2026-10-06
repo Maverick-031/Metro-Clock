@@ -47,6 +47,10 @@ class SoundPlayer(private val context: Context) {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Public API
+  // ---------------------------------------------------------------------------
+
   fun playAlarmSound(
     customUri: String = "",
     vibrate: Boolean = true,
@@ -115,8 +119,14 @@ class SoundPlayer(private val context: Context) {
     stopSound()
     try {
       val customParsed = if (customUri.isNotBlank()) {
-        try { Uri.parse(customUri) } catch (e: Exception) { null }
-      } else null
+        try {
+          Uri.parse(customUri)
+        } catch (e: Exception) {
+          null
+        }
+      } else {
+        null
+      }
 
       val soundUri: Uri? = customParsed
         ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
@@ -149,29 +159,6 @@ class SoundPlayer(private val context: Context) {
     }
   }
 
-  private fun startVolumeFade(durationSeconds: Int) {
-    val steps = 20
-    val intervalMillis = (durationSeconds * 1000L) / steps
-    var currentStep = 1
-
-    volumeFadeRunnable = object : Runnable {
-      override fun run() {
-        val mp = currentMediaPlayer ?: return
-        if (currentStep <= steps) {
-          val vol = (currentStep.toFloat() / steps.toFloat()).coerceIn(0.05f, 1.0f)
-          try {
-            mp.setVolume(vol, vol)
-          } catch (e: Exception) {
-            e.printStackTrace()
-          }
-          currentStep++
-          handler.postDelayed(this, intervalMillis)
-        }
-      }
-    }
-    handler.postDelayed(volumeFadeRunnable!!, intervalMillis)
-  }
-
   /**
    * Plays a preview of the selected sound. Resolves [soundName] as follows:
    * 1. Blank / "default" -> default notification sound
@@ -197,6 +184,123 @@ class SoundPlayer(private val context: Context) {
     }
   }
 
+  fun previewSoundUri(uriString: String, durationMillis: Long = 3000L) {
+    stopSound()
+    if (uriString.isBlank()) return
+
+    // FIX #4 – track whether MediaPlayer succeeded so the catch block
+    //          doesn't schedule a second, stale autoSilenceRunnable.
+    var playedViaMediaPlayer = false
+
+    try {
+      val parsedUri = Uri.parse(uriString)
+      currentMediaPlayer = MediaPlayer().apply {
+        setAudioAttributes(
+          AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_ALARM)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build()
+        )
+        setDataSource(context, parsedUri)
+        prepare()
+        setOnCompletionListener { stopSound() }
+        start()
+      }
+      playedViaMediaPlayer = true
+
+      autoSilenceRunnable = Runnable { stopSound() }
+      handler.postDelayed(autoSilenceRunnable!!, durationMillis)
+    } catch (e: Exception) {
+      if (playedViaMediaPlayer) return   // MediaPlayer already handled it
+      try {
+        currentRingtone = RingtoneManager.getRingtone(context, Uri.parse(uriString))?.apply {
+          play()
+        }
+        autoSilenceRunnable = Runnable { stopSound() }
+        handler.postDelayed(autoSilenceRunnable!!, durationMillis)
+      } catch (e2: Exception) {
+        e2.printStackTrace()
+      }
+    }
+  }
+
+  /**
+   * FIX #1 – required by ViewModel's replayAlarmSound() / replayTimerSound().
+   * Returns true if either a MediaPlayer or a Ringtone is actively playing.
+   */
+  fun isSoundPlaying(): Boolean = try {
+    (currentMediaPlayer?.isPlaying == true) || (currentRingtone?.isPlaying == true)
+  } catch (e: Exception) {
+    false
+  }
+
+  /**
+   * FIX #3 – each resource is now cleaned up in its own try/catch so a
+   *          failure in one (e.g. Ringtone.stop() throwing
+   *          IllegalStateException) can no longer skip vibration cleanup.
+   */
+  fun stopSound() {
+    // 1. Cancel pending runnables first (safe, no throw)
+    volumeFadeRunnable?.let { handler.removeCallbacks(it) }
+    volumeFadeRunnable = null
+
+    autoSilenceRunnable?.let { handler.removeCallbacks(it) }
+    autoSilenceRunnable = null
+
+    // 2. MediaPlayer
+    try {
+      currentMediaPlayer?.let {
+        if (it.isPlaying) it.stop()
+        it.release()
+      }
+    } catch (e: Exception) {
+      e.printStackTrace()
+    }
+    currentMediaPlayer = null
+
+    // 3. Ringtone  (can throw IllegalStateException if never fully initialised)
+    try {
+      currentRingtone?.stop()
+    } catch (e: Exception) {
+      e.printStackTrace()
+    }
+    currentRingtone = null
+
+    // 4. Vibration – always reached now, even if Ringtone.stop() threw
+    stopVibration()
+  }
+
+  // ---------------------------------------------------------------------------
+  // Volume fade
+  // ---------------------------------------------------------------------------
+
+  private fun startVolumeFade(durationSeconds: Int) {
+    val steps = 20
+    val intervalMillis = (durationSeconds * 1000L) / steps
+    var currentStep = 1
+
+    volumeFadeRunnable = object : Runnable {
+      override fun run() {
+        val mp = currentMediaPlayer ?: return
+        if (currentStep <= steps) {
+          val vol = (currentStep.toFloat() / steps.toFloat()).coerceIn(0.05f, 1.0f)
+          try {
+            mp.setVolume(vol, vol)
+          } catch (e: Exception) {
+            e.printStackTrace()
+          }
+          currentStep++
+          handler.postDelayed(this, intervalMillis)
+        }
+      }
+    }
+    handler.postDelayed(volumeFadeRunnable!!, intervalMillis)
+  }
+
+  // ---------------------------------------------------------------------------
+  // URI resolution helpers
+  // ---------------------------------------------------------------------------
+
   private fun resolvePreviewUri(soundName: String): Uri? {
     if (soundName.isBlank() || soundName.equals("default", ignoreCase = true)) {
       return RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
@@ -204,7 +308,11 @@ class SoundPlayer(private val context: Context) {
     }
 
     // 1. Looks like a URI or absolute path?
-    val parsed = try { Uri.parse(soundName) } catch (e: Exception) { null }
+    val parsed = try {
+      Uri.parse(soundName)
+    } catch (e: Exception) {
+      null
+    }
     if (parsed != null &&
       (parsed.scheme == "content" || parsed.scheme == "file" || soundName.startsWith("/"))
     ) {
@@ -219,7 +327,12 @@ class SoundPlayer(private val context: Context) {
       ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
   }
 
+  /**
+   * FIX #2 – cursor is now closed in a finally block so it can't leak
+   *          if an exception is thrown mid-iteration.
+   */
   private fun findByTitle(title: String): Uri? {
+    var cursor: android.database.Cursor? = null
     return try {
       val manager = RingtoneManager(context)
       manager.setType(
@@ -227,7 +340,7 @@ class SoundPlayer(private val context: Context) {
           RingtoneManager.TYPE_ALARM or
           RingtoneManager.TYPE_RINGTONE
       )
-      val cursor = manager.cursor
+      cursor = manager.cursor
       var found: Uri? = null
       if (cursor.moveToFirst()) {
         do {
@@ -238,70 +351,21 @@ class SoundPlayer(private val context: Context) {
           }
         } while (cursor.moveToNext())
       }
-      cursor.close()
       found
     } catch (e: Exception) {
       e.printStackTrace()
       null
-    }
-  }
-
-  fun previewSoundUri(uriString: String, durationMillis: Long = 3000L) {
-    stopSound()
-    try {
-      if (uriString.isBlank()) return
-      val parsedUri = Uri.parse(uriString)
-      currentMediaPlayer = MediaPlayer().apply {
-        setAudioAttributes(
-          AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_ALARM)
-            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-            .build()
-        )
-        setDataSource(context, parsedUri)
-        prepare()
-        setOnCompletionListener { stopSound() }
-        start()
-      }
-      autoSilenceRunnable = Runnable { stopSound() }
-      handler.postDelayed(autoSilenceRunnable!!, durationMillis)
-    } catch (e: Exception) {
+    } finally {
       try {
-        currentRingtone = RingtoneManager.getRingtone(context, Uri.parse(uriString))?.apply {
-          play()
-        }
-        autoSilenceRunnable = Runnable { stopSound() }
-        handler.postDelayed(autoSilenceRunnable!!, durationMillis)
-      } catch (e2: Exception) {
-        e2.printStackTrace()
+        cursor?.close()
+      } catch (_: Exception) {
       }
     }
   }
 
-  fun stopSound() {
-    try {
-      volumeFadeRunnable?.let { handler.removeCallbacks(it) }
-      volumeFadeRunnable = null
-
-      autoSilenceRunnable?.let { handler.removeCallbacks(it) }
-      autoSilenceRunnable = null
-
-      currentMediaPlayer?.let {
-        if (it.isPlaying) it.stop()
-        it.release()
-      }
-      currentMediaPlayer = null
-
-      currentRingtone?.stop()
-      currentRingtone = null
-
-      stopVibration()
-    } catch (e: Exception) {
-      e.printStackTrace()
-    }
-  }
-
-  // --- VIBRATION ---
+  // ---------------------------------------------------------------------------
+  // Vibration
+  // ---------------------------------------------------------------------------
 
   /**
    * Starts a repeating vibration pattern and schedules a keep-alive that
@@ -334,18 +398,14 @@ class SoundPlayer(private val context: Context) {
     val vib = vibrator ?: return
     try {
       // repeat = 0 -> loop the entire pattern forever.
-      // (repeat = -1 would play it exactly ONCE — that was the original bug.)
       val repeatingEffect = VibrationEffect.createWaveform(pattern, 0)
 
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        // API 31+ : VibrationAttributes with USAGE_ALARM so the vibration
-        // isn't silenced by Silent or DND mode.
         val attributes = VibrationAttributes.Builder()
           .setUsage(VibrationAttributes.USAGE_ALARM)
           .build()
         vib.vibrate(repeatingEffect, attributes)
       } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        // API 26-30 : standard VibrationEffect with alarm audio attributes
         val audioAttrs = AudioAttributes.Builder()
           .setUsage(AudioAttributes.USAGE_ALARM)
           .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
@@ -353,7 +413,6 @@ class SoundPlayer(private val context: Context) {
         @Suppress("DEPRECATION")
         vib.vibrate(repeatingEffect, audioAttrs)
       } else {
-        // API < 26 : deprecated overload — here the 2nd param IS the repeat index
         @Suppress("DEPRECATION")
         vib.vibrate(pattern, 0)
       }
