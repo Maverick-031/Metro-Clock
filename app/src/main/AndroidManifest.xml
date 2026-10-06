@@ -1,24 +1,35 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Exact Alarm Permissions -->
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+        MetroClock is an alarm-clock application whose core functionality
+        requires alarms to trigger at user-selected exact times.
+
+        USE_EXACT_ALARM is intended for qualifying alarm-clock and calendar
+        applications. Do not declare SCHEDULE_EXACT_ALARM at the same time.
+    -->
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
 
-    <!-- Notification & UI -->
+    <!-- Required for posting alarm and timer notifications on Android 13+. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Required when an alarm notification launches a full-screen UI. -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
 
-    <!-- Hardware & Background Execution -->
+    <!-- Alarm and timer hardware behavior. -->
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
-    <!-- Features: Calendar & Smart Skip -->
+    <!-- Foreground timer and stopwatch service. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission
+        android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
+    <!-- Required to restore enabled alarms following a device restart. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- Optional Smart Skip features. -->
     <uses-permission android:name="android.permission.READ_CALENDAR" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
@@ -36,6 +47,13 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.MyApplication">
 
+        <!--
+            Main alarm-clock UI.
+
+            singleTop allows an existing MainActivity to receive updated alarm
+            and timer Intents through onNewIntent() instead of creating another
+            Activity instance on top of it.
+        -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -44,38 +62,60 @@
             android:showWhenLocked="true"
             android:turnScreenOn="true"
             android:theme="@style/Theme.MyApplication">
+
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
+
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
 
+        <!--
+            Receives explicit alarm trigger, snooze, and dismiss Intents.
+
+            The receiver is not exported because these actions are internal to
+            MetroClock. AlarmManager and notification PendingIntents can still
+            deliver explicit Intents to a non-exported receiver.
+        -->
         <receiver
             android:name=".receiver.AlarmReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="app.metroclock.ALARM_TRIGGER" />
-                <action android:name="app.metroclock.ALARM_SNOOZE" />
-                <action android:name="app.metroclock.ALARM_DISMISS" />
-            </intent-filter>
-        </receiver>
+            android:enabled="true"
+            android:exported="false" />
 
+        <!--
+            Restores alarms after the device finishes booting.
+
+            This receiver must be exported because BOOT_COMPLETED is sent by
+            the Android system.
+        -->
         <receiver
             android:name=".receiver.BootReceiver"
+            android:enabled="true"
             android:exported="true">
+
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
             </intent-filter>
         </receiver>
 
+        <!--
+            Runs active countdown timer and stopwatch operations.
+
+            The service is private to MetroClock and can only be commanded by
+            this application.
+        -->
         <service
             android:name=".service.TimerService"
+            android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="specialUse">
+
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Persistent countdown timer and stopwatch execution" />
+                android:value="User-started countdown timer and stopwatch execution" />
         </service>
+
     </application>
+
 </manifest>
