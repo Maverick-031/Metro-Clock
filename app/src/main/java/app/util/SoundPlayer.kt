@@ -1,10 +1,7 @@
 package app.metroclock.util
 
-import android.Manifest
 import android.content.Context
-import android.content.pm.PackageManager
 import android.media.AudioAttributes
-import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.Ringtone
 import android.media.RingtoneManager
@@ -16,18 +13,33 @@ import android.os.VibrationAttributes
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
-import androidx.core.content.ContextCompat
 
 class SoundPlayer(private val context: Context) {
+
+  companion object {
+    /**
+     * Waveform format: [initial delay, vibrate ON, pause OFF, vibrate ON, ...]
+     */
+    private val ALARM_VIBRATION_PATTERN = longArrayOf(0, 1000, 1000)
+    private val TIMER_VIBRATION_PATTERN = longArrayOf(0, 400, 200, 400, 2000)
+
+    private const val PREVIEW_DURATION_MS = 5000L
+  }
+
   private var currentRingtone: Ringtone? = null
   private var currentMediaPlayer: MediaPlayer? = null
   private val handler = Handler(Looper.getMainLooper())
   private var volumeFadeRunnable: Runnable? = null
   private var autoSilenceRunnable: Runnable? = null
 
+  // Vibration keep-alive state
+  private var activeVibrationPattern: LongArray? = null
+  private var vibrationKeepAliveRunnable: Runnable? = null
+
   private val vibrator: Vibrator? by lazy {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-      val vibratorManager = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
+      val vibratorManager =
+        context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
       vibratorManager?.defaultVibrator
     } else {
       @Suppress("DEPRECATION")
@@ -81,15 +93,13 @@ class SoundPlayer(private val context: Context) {
       }
 
       if (vibrate) {
-        startVibration()
+        startVibration(ALARM_VIBRATION_PATTERN)
       }
 
       // Schedule auto-silence
       val silenceMinutes = silenceAfterMinutes.toIntOrNull() ?: 0
       if (silenceMinutes > 0) {
-        autoSilenceRunnable = Runnable {
-          stopSound()
-        }
+        autoSilenceRunnable = Runnable { stopSound() }
         handler.postDelayed(autoSilenceRunnable!!, silenceMinutes * 60 * 1000L)
       }
     } catch (e: Exception) {
@@ -132,7 +142,7 @@ class SoundPlayer(private val context: Context) {
       }
 
       if (vibrate) {
-        startVibration()
+        startVibration(TIMER_VIBRATION_PATTERN)
       }
     } catch (e: Exception) {
       e.printStackTrace()
@@ -162,15 +172,77 @@ class SoundPlayer(private val context: Context) {
     handler.postDelayed(volumeFadeRunnable!!, intervalMillis)
   }
 
-  fun previewSound(soundName: String) {
+  /**
+   * Plays a preview of the selected sound. Resolves [soundName] as follows:
+   * 1. Blank / "default" -> default notification sound
+   * 2. A content:// or file:// URI (or absolute path) -> played directly
+   * 3. Otherwise -> matched by title against system alarm/notification/ringtone sounds
+   * 4. Falls back to the default notification sound if nothing matches
+   */
+  fun previewSound(soundName: String, durationMillis: Long = PREVIEW_DURATION_MS) {
     stopSound()
     try {
-      val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+      val uri = resolvePreviewUri(soundName) ?: return
       currentRingtone = RingtoneManager.getRingtone(context, uri)?.apply {
+        audioAttributes = AudioAttributes.Builder()
+          .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+          .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+          .build()
         play()
       }
+      autoSilenceRunnable = Runnable { stopSound() }
+      handler.postDelayed(autoSilenceRunnable!!, durationMillis)
     } catch (e: Exception) {
       e.printStackTrace()
+    }
+  }
+
+  private fun resolvePreviewUri(soundName: String): Uri? {
+    if (soundName.isBlank() || soundName.equals("default", ignoreCase = true)) {
+      return RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+        ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+    }
+
+    // 1. Looks like a URI or absolute path?
+    val parsed = try { Uri.parse(soundName) } catch (e: Exception) { null }
+    if (parsed != null &&
+      (parsed.scheme == "content" || parsed.scheme == "file" || soundName.startsWith("/"))
+    ) {
+      return parsed
+    }
+
+    // 2. Try to match a system sound by its title (e.g. "Platinum", "Lunar")
+    findByTitle(soundName)?.let { return it }
+
+    // 3. Fall back to default
+    return RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+      ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+  }
+
+  private fun findByTitle(title: String): Uri? {
+    return try {
+      val manager = RingtoneManager(context)
+      manager.setType(
+        RingtoneManager.TYPE_NOTIFICATION or
+          RingtoneManager.TYPE_ALARM or
+          RingtoneManager.TYPE_RINGTONE
+      )
+      val cursor = manager.cursor
+      var found: Uri? = null
+      if (cursor.moveToFirst()) {
+        do {
+          val soundTitle = cursor.getString(RingtoneManager.TITLE_COLUMN_INDEX)
+          if (soundTitle?.equals(title, ignoreCase = true) == true) {
+            found = manager.getRingtoneUri(cursor.position)
+            break
+          }
+        } while (cursor.moveToNext())
+      }
+      cursor.close()
+      found
+    } catch (e: Exception) {
+      e.printStackTrace()
+      null
     }
   }
 
@@ -229,34 +301,59 @@ class SoundPlayer(private val context: Context) {
     }
   }
 
-  // --- UPDATED VIBRATION LOGIC ---
+  // --- VIBRATION ---
 
-  private fun startVibration() {
-    // 1. Check if the device has a vibrator and if the permission is granted
+  /**
+   * Starts a repeating vibration pattern and schedules a keep-alive that
+   * re-asserts it periodically, in case another app cancels our vibration
+   * (e.g. an incoming notification). The re-assert interval is a multiple of
+   * the pattern length, so restarts are seamless.
+   */
+  private fun startVibration(pattern: LongArray) {
     val vib = vibrator ?: return
     if (!vib.hasVibrator()) return
-    if (ContextCompat.checkSelfPermission(context, Manifest.permission.VIBRATE) != PackageManager.PERMISSION_GRANTED) {
-        return
-    }
 
+    // Cancel any previous keep-alive before starting fresh
+    vibrationKeepAliveRunnable?.let { handler.removeCallbacks(it) }
+    activeVibrationPattern = pattern
+
+    vibrateNow(pattern)
+
+    val keepAliveIntervalMs = (pattern.sum() * 2).coerceIn(4000L, 10000L)
+    vibrationKeepAliveRunnable = object : Runnable {
+      override fun run() {
+        val currentPattern = activeVibrationPattern ?: return
+        vibrateNow(currentPattern)
+        handler.postDelayed(this, keepAliveIntervalMs)
+      }
+    }
+    handler.postDelayed(vibrationKeepAliveRunnable!!, keepAliveIntervalMs)
+  }
+
+  private fun vibrateNow(pattern: LongArray) {
+    val vib = vibrator ?: return
     try {
-      // 2. Use a simple, reliable repeating pattern:
-      // [delay before start, vibrate duration, pause duration]
-      // The last parameter -1 means "repeat indefinitely"
-      val pattern = longArrayOf(0, 1000, 1000) // Start immediately, vibrate 1s, pause 1s
+      // repeat = 0 -> loop the entire pattern forever.
+      // (repeat = -1 would play it exactly ONCE — that was the original bug.)
+      val repeatingEffect = VibrationEffect.createWaveform(pattern, 0)
 
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        // API 31+ (Android 12+) : Use VibrationAttributes with USAGE_ALARM
-        // This ensures the vibration isn't silenced by Silent or DND mode.
+        // API 31+ : VibrationAttributes with USAGE_ALARM so the vibration
+        // isn't silenced by Silent or DND mode.
         val attributes = VibrationAttributes.Builder()
           .setUsage(VibrationAttributes.USAGE_ALARM)
           .build()
-        vib.vibrate(VibrationEffect.createWaveform(pattern, -1), attributes)
+        vib.vibrate(repeatingEffect, attributes)
       } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        // API 26-30 (Android 8-11) : Use standard VibrationEffect
-        vib.vibrate(VibrationEffect.createWaveform(pattern, -1))
+        // API 26-30 : standard VibrationEffect with alarm audio attributes
+        val audioAttrs = AudioAttributes.Builder()
+          .setUsage(AudioAttributes.USAGE_ALARM)
+          .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+          .build()
+        @Suppress("DEPRECATION")
+        vib.vibrate(repeatingEffect, audioAttrs)
       } else {
-        // API < 26 : Use deprecated method
+        // API < 26 : deprecated overload — here the 2nd param IS the repeat index
         @Suppress("DEPRECATION")
         vib.vibrate(pattern, 0)
       }
@@ -266,6 +363,9 @@ class SoundPlayer(private val context: Context) {
   }
 
   private fun stopVibration() {
+    activeVibrationPattern = null
+    vibrationKeepAliveRunnable?.let { handler.removeCallbacks(it) }
+    vibrationKeepAliveRunnable = null
     try {
       vibrator?.cancel()
     } catch (e: Exception) {
